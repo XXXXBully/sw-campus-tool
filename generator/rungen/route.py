@@ -11,7 +11,8 @@ rungen/route.py —— 路径规划 (打卡点必经 + 距离对齐)
     1. 以"起点 + 打卡点"构建一条基础折线 (途经全部打卡点)
     2. 若基础折线长度 < 目标距离, 按**圈**重复 (多圈跑/往返跑)
        —— 这正是校园跑的真实形态: 操场绕圈、或者在教学楼之间来回
-    3. 圈与圈之间做轻微侧偏 (避免轨迹完全重合, 更真实)
+    3. 圈与圈之间做**极小幅度**侧偏（`LAP_LATERAL_M`，围绕基准线摆动，
+       不做单调外推 —— 单调外推会让多圈变成同心椭圆，见该常量注释）
     4. Catmull-Rom 平滑转弯
     5. 缩放到精确目标长度 + 重采样
     6. 叠加 GPS 漂移噪声
@@ -38,6 +39,16 @@ class RouteMode:
     LOOP = "loop"                 # 环线 / 多圈
     POINT2POINT = "p2p"           # 点到点
     OUT_AND_BACK = "outback"      # 折返 / 多趟
+
+
+# ★★ 计分跑多圈时的「圈间侧偏」幅度上限（米）—— 2026-09-27
+#   真实跑者每圈基本沿同一条线，换道也只是道宽量级（1.22 m）。
+#   旧实现按 `amp*(1+0.5*lap)` **单调向外**外推（amp=4 → 6/8/10/12 m），
+#   5 圈变 5 个同心椭圆，App 上就是「一团锯齿的小圈」。
+#   实测（揭阳 5 打卡点 / 2.12km / seed 1，自邻近带厚 p95）：
+#       旧 23.19 m  →  新 3.81 m（其中下游 ~3.5 m 是 14.6 m 采样栅格的弦切伪影）
+#   1.2 m 的幅度经下游重采样后对带厚只贡献 ~0.05 m，仅用于避免各圈逐字节相同。
+LAP_LATERAL_M = 1.2
 
 
 # ============================================================
@@ -489,7 +500,7 @@ def _scale_about_anchors_open(path_xy: Sequence[Tuple[float, float]],
 def _repeat_to_length(base: Sequence[Tuple[float, float]],
                       target_len: float,
                       rng: random.Random,
-                      lateral_m: float = 4.0,
+                      lateral_m: float = LAP_LATERAL_M,
                       waypoints: Sequence[Tuple[float, float]] = (),
                       anchor: Optional[Tuple[float, float]] = None,
                       ) -> Tuple[List[Tuple[float, float]], int]:
@@ -574,31 +585,46 @@ def _repeat_to_length(base: Sequence[Tuple[float, float]],
     cx = sum(p[1] for p in base) / len(base)
 
     ctrl: List[Tuple[float, float]] = []
+    # ★★ 圈间侧偏：必须**小且围绕基准线摆动**（2026-09-27 修）
+    #   旧实现 `off = amp*(1+0.5*min(lap,4))` 是**单调向外**的：
+    #     amp=4.0 时第 2/3/4/5 圈分别外推 6/8/10/12 m →
+    #     5 圈变成 5 个同心椭圆，圈质心最大漂移 **24 m**（实测），
+    #     App 上就是「一团锯齿的小圈」而不是干净的跑道椭圆。
+    #   ★ 真实跑道：跑者基本沿同一条线，换道也只有道宽量级（1.22 m）。
+    #   所以改为**围绕基准线的小幅准随机摆动**，累计漂移有界（≤ 2·amp）。
+    #   用黄金角序列而非 rng：确定性、且**不消耗随机数流**
+    #   （消耗会改变既有种子的产出，让回归基线整体漂移）。
+    amp = min(max(lateral_m, 0.0), LAP_LATERAL_M)
     for lap in range(laps):
-        # ★ 侧偏策略: 总偏移量必须很小, 否则圈数一多 (可能 30+ 圈),
-        #   最后一圈的偏移会累积到几十米, 把打卡点甩出半径之外。
-        #   这里让偏移量随圈数增加而**衰减**, 上限约 6m。
-        if lap == 0:
+        if lap == 0 or amp <= 1e-9:
             off = 0.0
         else:
-            amp = min(lateral_m, 6.0 / max(1.0, laps / 6.0))
-            off = amp * (1.0 + 0.5 * min(lap, 4))
+            off = amp * math.sin(lap * 2.399963229728653)   # 黄金角 → 准均匀
         for i, (la, lo) in enumerate(base):
             if lap > 0 and i == 0:
                 continue                    # 接缝点不重复
             if off <= 1e-9:
                 ctrl.append((la, lo))
             else:
-                # ★ 打卡点附近不偏移, 保证每一圈都能打到卡
+                # ★ 打卡点附近不偏移（保证每一圈都能打到卡），
+                #   并做**平滑过渡**：硬切会让圈在 d_cp≈12m 处出现折角，
+                #   那也是「锯齿」的来源之一。
                 if waypoints:
-                    d_cp = min(haversine(la, lo, w[0], w[1]) for w in waypoints)
+                    d_cp = min(haversine(la, lo, w[0], w[1])
+                               for w in waypoints)
                 else:
                     d_cp = float("inf")
                 if d_cp < 12.0:
+                    off_i = 0.0
+                elif d_cp < 25.0:
+                    off_i = off * (d_cp - 12.0) / 13.0
+                else:
+                    off_i = off
+                if off_i <= 1e-9:
                     ctrl.append((la, lo))
                 else:
                     brg = bearing(cy, cx, la, lo)
-                    ctrl.append(dest_point(la, lo, brg, off))
+                    ctrl.append(dest_point(la, lo, brg, off_i))
 
     ctrl.append(ctrl[0])                    # 闭合
     return ctrl, laps
@@ -742,7 +768,7 @@ def plan_route(start: Tuple[float, float],
         base = _build_base_loop(start, waypoints, rng, bulge=bulge)
         ctrl, laps = _repeat_to_length(
             base, target_len, rng,
-            lateral_m=(0.0 if len(waypoints) == 0 else 4.0),
+            lateral_m=(0.0 if len(waypoints) == 0 else LAP_LATERAL_M),
             waypoints=waypoints, anchor=start)
 
     # ---------- 2. 平面坐标 (以 ctrl[0] 为投影原点) ----------
