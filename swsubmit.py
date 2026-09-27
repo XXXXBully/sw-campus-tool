@@ -28,6 +28,7 @@ import swclient as sw
 
 RECORD_PATH = "/api/v70260/runnings/save/record"
 POLICY_PATH = "/api/v70103/runModePolicy"
+FENCE_PATH = "/api/v1/getGeoFenceForRun"
 SIGN_SALT = "2slhe02lsfiwowlcixisla_sls-_slaor"
 
 # UploadSignEntity 声明顺序（31 字段）
@@ -126,11 +127,15 @@ def five_point_payload(points: list, start_ms: int) -> list:
     return out
 
 
-def five_point_wrapper(points: list, start_ms: int) -> str:
+def five_point_wrapper(points: list, start_ms: int,
+                       geo_fences: list = None) -> str:
     """提交 body 的 fivePointJson 包装串（计分跑用）。
 
     仅当 mode=score 且有真实打卡点时调用；自由跑【不传】此字段
     （用户真机确认：自由跑无围栏、无打卡点）。
+
+    geo_fences：服务端 getGeoFenceForRun 下发的围栏，用于填 `geoFencesJson`。
+      ★ 不传 → 退回 "[]"（旧行为，详情页无围栏可画）。
     """
     five = five_point_payload(points, start_ms)
     return json.dumps({
@@ -138,9 +143,99 @@ def five_point_wrapper(points: list, start_ms: int) -> str:
         "fivePointJson": json.dumps(five, separators=(",", ":"),
                                     ensure_ascii=False),
         "runAreaId": -1,
-        "geoFencesJson": "[]",
+        "geoFencesJson": geo_fences_json(geo_fences),
         "freedomShowFence": False,
     }, separators=(",", ":"), ensure_ascii=False)
+
+
+# ══════════════════════════════════════════════════════════════════
+# 围栏（geoFencesJson）—— 详情页「围栏范围」的数据源
+# ══════════════════════════════════════════════════════════════════
+def norm_geo_fences(geo_fences: list) -> list:
+    """把服务端 getGeoFenceForRun 的 geoFences 规整成记录侧最小结构。
+
+    ★★ 2026-09-27 真机定因（logcat 里 App 自己的 Gson 堆栈，非推测）★★
+        RunHistoryDetailPImpl.getObsData
+          → ObsClient.download
+          → RunHistoryDetailPImpl.drawGeoFence
+          → Gson.fromJson(..., <Collection>)     ← CollectionTypeAdapterFactory
+        抛 java.lang.IllegalStateException:
+             Expected BEGIN_ARRAY but was BEGIN_OBJECT at line 1 column 2
+      ⇒ `geoFencesJson` 必须是 **JSON 数组**，即
+            [{"id":"2351","points":[{"lat":…,"lon":…}, …]}]
+        **不是** {"updateTime":…,"geoFences":[…]} 那种对象。
+
+      实测对照（同一条记录，只改这一个字段）：
+        · 填对象 → Gson 抛异常，drawGeoFence 中断，**连轨迹都不画**（地图空白）
+        · 填数组 → 围栏多边形 + 轨迹 + 打卡点标记**全部出现**
+      ⇒ 旧代码恒填 "[]"（合法空数组）所以不报错，但也就没有围栏可画。
+
+    ★ 坐标：服务端点位的 glon/glat 才是真值（GCJ-02），lon/lat 恒为 0.0。
+      详情页底图是高德（GCJ-02），所以记录侧 lat/lon 直接取 glat/glon。
+    ★ id 转字符串：串表里 `GeoFencesBean{id='` 带引号（String 字段）。
+    """
+    out = []
+    for f in geo_fences or []:
+        if not isinstance(f, dict):
+            continue
+        pts = []
+        for p in (f.get("points") or []):
+            if not isinstance(p, dict):
+                continue
+            lat = p.get("lat") or 0.0
+            lon = p.get("lon") or 0.0
+            if not lat or not lon:              # 服务端就是 0.0 → 用 GCJ 兜底
+                lat = p.get("glat") or lat
+                lon = p.get("glon") or lon
+            try:
+                pts.append({"lat": round(float(lat), 6),
+                            "lon": round(float(lon), 6)})
+            except (TypeError, ValueError):
+                continue
+        if not pts:                             # 空围栏不落盘（画不出任何东西）
+            continue
+        item = {"id": str(f.get("id")), "points": pts,
+                "pointsNumber": len(pts)}
+        if f.get("name") is not None:
+            item["name"] = f.get("name")
+        out.append(item)
+    return out
+
+
+def geo_fences_json(geo_fences: list) -> str:
+    """记录侧 `geoFencesJson` 字符串（**数组**，见 norm_geo_fences 的定因）。"""
+    return json.dumps(norm_geo_fences(geo_fences), separators=(",", ":"),
+                      ensure_ascii=False)
+
+
+def fetch_geo_fences(call_fn, verbose: bool = True) -> list:
+    """拉学校围栏：POST /api/v1/getGeoFenceForRun，body "{}"（实测空 body 即可）。
+
+    ★ 任何失败都返回 []（提交照旧进行），只在 verbose 时说明原因 ——
+      围栏缺失只影响详情页画不画围栏，绝不该让一次跑步提交失败。
+    """
+    try:
+        _, biz, err, _raw = call_fn("POST", FENCE_PATH, "{}", verbose=False)
+    except Exception as e:
+        if verbose:
+            print("  [围栏] 拉取异常（按无围栏继续）: %s" % str(e)[:120])
+        return []
+    if not isinstance(biz, dict):
+        if verbose:
+            print("  [围栏] 无业务体（按无围栏继续）: %s" % str(err)[:120])
+        return []
+    data = biz.get("data")
+    fences = data.get("geoFences") if isinstance(data, dict) else None
+    if not isinstance(fences, list) or not fences:
+        if verbose:
+            print("  [围栏] 服务端未下发围栏（error=%s）→ geoFencesJson=\"[]\""
+                  % biz.get("error"))
+        return []
+    got = norm_geo_fences(fences)
+    if verbose:
+        print("  [围栏] 下发 %d 个围栏 / %d 个顶点 → geoFencesJson 已填充"
+              % (len(got), sum(len(g["points"]) for g in got)))
+    return got
 
 
 def round_to(v: float, nd: int) -> float:

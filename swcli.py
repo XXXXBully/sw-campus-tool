@@ -996,12 +996,21 @@ def cmd_submit(args):
     if getattr(args, "sport_type", None) is not None:
         sport_type = int(args.sport_type)
     # 五点（真实打卡点）：仅计分跑传 fivePointJson；自由跑无围栏无打卡点 → 不传
+    # ★ 围栏（2026-09-27 真机定因）：详情页「围栏范围」画的是**记录自身的
+    #   geoFencesJson**（RunHistoryDetailPImpl.getObsData → drawGeoFence →
+    #   Gson.fromJson(List)）。以前恒填 "[]" → 详情页没有围栏可画。
+    #   这里拉一次学校围栏，同时喂给提交体与 OBS 对象（单一实现见
+    #   swsubmit.norm_geo_fences）。拉取失败只警告，不阻塞提交。
+    geo_fences = []
+    if is_score:
+        geo_fences = swsubmit.fetch_geo_fences(c.call)
     five_point_json = ""
     if is_score and prep.get("points"):
         try:
             first_ts = int((track.get("points") or [{}])[0].get("ts") or 0)
             five_point_json = swsubmit.five_point_wrapper(prep["points"],
-                                                          first_ts)
+                                                          first_ts,
+                                                          geo_fences)
             print("  [五点] 计分跑携带 %d 个真实打卡点" % len(prep["points"]))
         except Exception as e:
             print("  [warn] 五点组装失败（不阻塞提交）: %s" % e)
@@ -1059,7 +1068,7 @@ def cmd_submit(args):
         obs_ok, keys = swobs.upload_track(
             c.call, pts, rrid=int(rrid), uuid=meta["uuid"], uid=c.uid,
             start_ms=meta["start_ms"], total_time=meta["total_time"],
-            with_steps=True, fixed_points=obs_cps)
+            with_steps=True, fixed_points=obs_cps, geo_fences=geo_fences)
     except Exception as e:
         print("[ERR] OBS 上传异常: %s" % e)
         return 4

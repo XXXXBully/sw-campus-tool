@@ -134,6 +134,31 @@ def gz_str(s: str) -> str:
     return gz(s.encode("utf-8"))
 
 
+# ── 「二次包裹」载荷（列表型字段专用）────────────────────────────
+# ★ 真机实测定因（2026-09-27，logcat）：
+#     RunHistoryDetailActivity.parseLapRows
+#       → mvi.run.oo0o0Oo.OooO0oO
+#       → utils.o0OO00O.OooO0oO 抛 java.util.zip.ZipException: Not in GZIP format
+#   ⇒ App 对「列表型」载荷（laps / speed / step_freq / segment）**还要再解一层 gzip**。
+#   信封解一层后 App 拿到的是明文 → 再 gunzip 就炸。所以这些键里装的**本身就得是
+#   gzip+b64**（即解两层才见明文）。
+#   后果对照（同一条记录，只改这一处）：
+#     单层 → ZipException 中断 setMapCenter，「每公里数据」整块不渲染
+#     双层 → 异常计数 0；每公里数据 / 配速图 / 海拔图 / 步频步幅 全部正常
+#   （配速图均值 5'40" == 680s÷2km，证明 App 解出的确实是我们的原始数据）
+def gz2(data: bytes) -> str:
+    """把「已是 gzip+b64 的字符串」再包一层 → 解两层才见明文。"""
+    return gz(data)
+
+
+def gz2_json(v) -> str:
+    return gz(gz_json(v).encode("ascii"))
+
+
+def gz2_str(s: str) -> str:
+    return gz(gz_str(s).encode("ascii"))
+
+
 def round_to(v: float, nd: int) -> float:
     f = 10.0 ** nd
     return math.floor(abs(v) * f + 0.5) / f * (1 if v >= 0 else -1)
@@ -370,6 +395,17 @@ def five_point_payload(points: list, start_ms: int) -> list:
     return swsubmit.five_point_payload(points, start_ms)
 
 
+def geo_fences_json(geo_fences: list) -> str:
+    """记录侧 `geoFencesJson` 字符串（**JSON 数组**）。
+
+    字段实现委托给 swsubmit.geo_fences_json，保证提交 body 与 OBS 对象里
+    的 geoFencesJson 结构完全一致（单一实现，避免两份漂移）。
+    定因（App 的 Gson 要求 BEGIN_ARRAY）见 swsubmit.norm_geo_fences。
+    """
+    import swsubmit
+    return swsubmit.geo_fences_json(geo_fences)
+
+
 # ══════════════════════════════════════════════════════════════════
 # 10 键 OBS 对象 & key 命名
 # ══════════════════════════════════════════════════════════════════
@@ -381,8 +417,15 @@ def obs_keys(start_ms: int, rrid: int, uuid: str) -> list:
 
 def build_obs_object(points: list, *, rrid: int, uuid: str, uid: int,
                      start_ms: int, total_time: int, with_steps: bool = True,
-                     fixed_points: list = None) -> dict:
+                     fixed_points: list = None,
+                     geo_fences: list = None) -> dict:
     """组装 10 键 OBS 对象（值均 gzip+base64）
+
+    ★ 两层包裹：`run_data` / `fixed_point_json` / `rrid` / `uuid` / `uid` /
+      `runFaceCheck` 是**单层**（信封解一层即明文）；而**列表型**四键
+      （`laps_json` / `speed_json` / `step_freq_json` / `segment_json`）
+      是**双层**（App 还要再 gunzip 一次）—— 定因见 gz2_json 的注释。
+      写错层数的后果不是「数据难看」，而是 `ZipException` 直接中断详情页渲染。
 
     with_steps 参数保留以兼容旧调用，但自由跑与计分跑【都要】完整
     步频/步幅数据（详情页图表数据源），不再清零。
@@ -392,6 +435,19 @@ def build_obs_object(points: list, *, rrid: int, uuid: str, uid: int,
         · 自由跑 → 传 [] 或 None → fivePointJson = "[]"（无点位）
         · 计分跑 → 传学校下发的点位
       ★ 绝不传轨迹点：轨迹点属于 run_data.allLocJson，两者是不同的东西。
+
+    geo_fences：【服务端下发的围栏】，只用于 fixed_point_json 里的
+      geoFencesJson。
+        · 必须是 JSON **数组** [{"id":"2351","points":[{lat,lon}]}]。
+          填成对象 {"updateTime":…,"geoFences":[…]} 会让 App 的 Gson 抛
+          BEGIN_ARRAY but was BEGIN_OBJECT，drawGeoFence 中断，**连轨迹都不画**。
+        · ★ 但它**不足以**让详情页画出围栏：真机 A/B 试过 5 种变体
+          （数组 / 服务端原样 / freedomShowFence=true / runAreaId=2351 /
+          计分跑 + 自由跑），围栏与打卡点标记**始终未出现**。
+          即「详情页地图的围栏层另有数据源」，尚未定位 —— 详见
+          `.workbuddy-ai/memory/MEMORY.md` 的「围栏」段。
+          保留该字段是因为它确实是 App 的真实字段、格式已正确，
+          且不影响其它任何渲染。
     """
     pts = [conv_point(p, start_ms) for p in points]
     run_wrap = {"allLocJson": json.dumps(pts, separators=(",", ":"),
@@ -403,7 +459,7 @@ def build_obs_object(points: list, *, rrid: int, uuid: str, uid: int,
     fx = {"fivePointJson": json.dumps(five, separators=(",", ":"),
                                       ensure_ascii=False),
           "freedomShowFence": False,
-          "geoFencesJson": "[]",
+          "geoFencesJson": geo_fences_json(geo_fences),
           "runAreaId": -1,
           "useZip": False}
     return {
@@ -412,10 +468,10 @@ def build_obs_object(points: list, *, rrid: int, uuid: str, uid: int,
         "uid": gz_str(str(uid)),
         "run_data": gz_json(run_wrap),
         "fixed_point_json": gz_json(fx),
-        "segment_json": gz_str(""),
-        "speed_json": gz_json(sp),
-        "step_freq_json": gz_json(stf),
-        "laps_json": gz_json(laps),
+        "segment_json": gz2_str(""),
+        "speed_json": gz2_json(sp),
+        "step_freq_json": gz2_json(stf),
+        "laps_json": gz2_json(laps),
         "runFaceCheck": gz_str(""),
     }
 
@@ -463,15 +519,18 @@ def put_object(signed_url: str, payload: bytes) -> int:
 
 def upload_track(call_fn, points: list, *, rrid: int, uuid: str, uid: int,
                  start_ms: int, total_time: int, with_steps: bool = True,
-                 fixed_points: list = None, verbose: bool = True):
+                 fixed_points: list = None, geo_fences: list = None,
+                 verbose: bool = True):
     """完整 OBS 上传：组装 → 换签名 → 双 key PUT。返回成功数。
 
     fixed_points：服务端下发的打卡点（自由跑传 [] / 不传 → fivePointJson="[]"）。
+    geo_fences  ：服务端下发的围栏（不传 → geoFencesJson="[]"，详情页无围栏）。
     """
     obj = build_obs_object(points, rrid=rrid, uuid=uuid, uid=uid,
                            start_ms=start_ms, total_time=total_time,
                            with_steps=with_steps,
-                           fixed_points=fixed_points)
+                           fixed_points=fixed_points,
+                           geo_fences=geo_fences)
     payload = json.dumps(obj, separators=(",", ":"),
                          ensure_ascii=False).encode("utf-8")
     keys = obs_keys(start_ms, rrid, uuid)
@@ -528,6 +587,12 @@ def selftest() -> bool:
     print("=" * 62)
     print("swobs 自检")
     print("=" * 62)
+
+    import base64
+
+    def _unwrap1(v: str) -> str:
+        """信封解一层（gzip+b64 → 明文）。"""
+        return gzip.decompress(base64.b64decode(v)).decode("utf-8")
 
     # 1) 坐标转换
     a, b = wgs84_to_gcj02(22.981367, 116.332141)
@@ -606,13 +671,98 @@ def selftest() -> bool:
           % ("OK " if good2 else "FAIL"))
     ok &= good2
 
-    # 7) id 规则
+    # 7) id 规则（speed_json 是双层包裹，要解两层）
     print("  speed_json[0].id 规则: (rrid%%100000)*1000+hi")
-    spj = json.loads(_gz.decompress(base64.b64decode(obj["speed_json"])).decode("utf-8"))
+    spj = json.loads(_gz.decompress(base64.b64decode(
+        _gz.decompress(base64.b64decode(obj["speed_json"])).decode("utf-8"))).decode("utf-8"))
     exp_id = (1322680573 % 100000) * 1000 + 10
     print("  %s id=%d (期望 %d)" % ("OK " if spj[0]["id"] == exp_id else "FAIL",
                                     spj[0]["id"], exp_id))
     ok &= spj[0]["id"] == exp_id
+
+    # 8) ★★ 围栏：geoFencesJson 必须是 JSON **数组**（2026-09-27 真机定因）
+    gf_raw = [{"id": 2351, "name": "围栏",
+               "points": [{"lon": 0.0, "lat": 0.0, "glon": 116.330092,
+                           "glat": 22.982321, "pointsNumber": 1}]}]
+    obj3 = build_obs_object(pts, rrid=1322680573, uuid="UUID-T", uid=12345678,
+                            start_ms=1789534834000, total_time=10,
+                            fixed_points=cps, geo_fences=gf_raw)
+    fx3 = json.loads(_gz.decompress(
+        base64.b64decode(obj3["fixed_point_json"])).decode("utf-8"))
+    gj3 = json.loads(fx3["geoFencesJson"])
+    c_f1 = isinstance(gj3, list)                       # ← 关键：数组不是对象
+    c_f2 = (len(gj3) == 1 and gj3[0]["id"] == "2351"
+            and gj3[0]["points"][0]["lat"] == 22.982321     # glat 兜底
+            and gj3[0]["points"][0]["lon"] == 116.330092)   # glon 兜底
+    print("  [围栏] geoFencesJson 顶层类型 = %s (期望 list)"
+          % type(gj3).__name__)
+    print("  %s 围栏是 JSON 数组（App Gson 要求 BEGIN_ARRAY）"
+          % ("OK " if c_f1 else "FAIL"))
+    print("  %s 顶点用 glat/glon 兜底、id 转字符串" % ("OK " if c_f2 else "FAIL"))
+    ok &= (c_f1 and c_f2)
+
+    # 不传围栏 → 回到 "[]"（旧行为），且仍然是数组
+    obj4 = build_obs_object(pts, rrid=1322680573, uuid="UUID-T", uid=12345678,
+                            start_ms=1789534834000, total_time=10)
+    fx4 = json.loads(_gz.decompress(
+        base64.b64decode(obj4["fixed_point_json"])).decode("utf-8"))
+    c_f3 = json.loads(fx4["geoFencesJson"]) == []
+    print("  %s 不传围栏 → geoFencesJson=\"[]\"" % ("OK " if c_f3 else "FAIL"))
+    ok &= c_f3
+
+    # ★ 变异自检：把「空围栏」伪造成对象形状，必须不再通过数组断言
+    c_f4 = isinstance(json.loads(json.dumps({"updateTime": 1, "geoFences": []})),
+                      list) is False
+    print("  %s 变异自检：对象形状不被当成数组" % ("OK " if c_f4 else "FAIL"))
+    ok &= c_f4
+
+    # 9) ★★ 列表型四键必须是「双层包裹」（App 会再 gunzip 一次）
+    #    真机症状：单层 → ZipException: Not in GZIP format → 详情页「每公里数据」不渲染
+    list_keys = ("laps_json", "speed_json", "step_freq_json", "segment_json")
+    layer_ok = {}
+    for k in list_keys:
+        try:
+            _unwrap1(_unwrap1(obj[k]))          # 解两层必须成功
+            layer_ok[k] = True
+        except Exception:
+            layer_ok[k] = False
+    print("  %s 列表型四键可解两层 %s"
+          % ("OK " if all(layer_ok.values()) else "FAIL",
+             {k: ("2层" if v else "不足2层") for k, v in layer_ok.items()}))
+    ok &= all(layer_ok.values())
+
+    # 解两层后必须是合法 JSON / 空串
+    laps2 = json.loads(_unwrap1(_unwrap1(obj["laps_json"])))
+    c_l1 = isinstance(laps2, list) and len(laps2) >= 1
+    print("  %s laps_json 解两层 == JSON 数组(%d 圈)"
+          % ("OK " if c_l1 else "FAIL", len(laps2) if isinstance(laps2, list) else -1))
+    ok &= c_l1
+    c_l2 = _unwrap1(_unwrap1(obj["segment_json"])) == ""
+    print("  %s segment_json 解两层 == 空串" % ("OK " if c_l2 else "FAIL"))
+    ok &= c_l2
+
+    # 单层键必须【只】解一层（多解一层要失败）—— 防止把全部键都改成双层
+    single_ok = True
+    for k in ("rrid", "run_data", "fixed_point_json"):
+        try:
+            _unwrap1(_unwrap1(obj[k]))           # 再解一层应当炸
+            single_ok = False
+        except Exception:
+            pass
+    print("  %s 单层键（rrid/run_data/fixed_point_json）只解一层"
+          % ("OK " if single_ok else "FAIL"))
+    ok &= single_ok
+
+    # ★ 变异自检：故意把 laps_json 退回单层，断言必须能抓到
+    bad = dict(obj)
+    bad["laps_json"] = gz_json(laps2)          # 退回单层（即修复前的线上行为）
+    try:
+        _unwrap1(_unwrap1(bad["laps_json"]))
+        caught = False
+    except Exception:
+        caught = True
+    print("  %s 变异自检：单层 laps_json 会被抓出" % ("OK " if caught else "FAIL"))
+    ok &= caught
 
     print("=" * 62)
     print("汇总: %s" % ("全部通过" if ok else "存在失败"))
