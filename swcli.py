@@ -907,6 +907,12 @@ def cmd_submit(args):
     unid = args.unid or int(c.session.get("unid", 0) or 0)
 
     # 0) 双模式自动生成轨迹
+    # ★ 记录 address 的来源：**校区城市** > 设备档案 city。
+    #   ⚠ 2026-09-28 定因：旧实现只取 `c.identity.city`，而发布包为隐私脱敏把它
+    #     统一写成「大连市」（_gh_tools/clean_release.py）⇒ 不管在哪跑都显示大连市。
+    #     地址该由校区决定（真机 App 也是城市级反地理编码）。
+    record_address = str(getattr(args, "address", None)
+                         or getattr(c.identity, "city", "") or "")
     if mode in ("free", "score") and not track_path:
         import swmode
         import campus
@@ -915,7 +921,7 @@ def cmd_submit(args):
         if args.campus_lat is not None and args.campus_lon is not None:
             clat, clon = float(args.campus_lat), float(args.campus_lon)
             camp = {"name": "命令行指定", "lat": clat, "lon": clon,
-                    "unid": unid}
+                    "unid": unid, "city": ""}
         else:
             camp = campus.pick_campus(c, unid)
             if camp.get("lat") is None or camp.get("lon") is None:
@@ -925,6 +931,10 @@ def cmd_submit(args):
                 return 2
             clat, clon = camp["lat"], camp["lon"]
             unid = int(camp.get("unid") or unid or 0)
+        # 地址取**校区城市**（命令行/覆盖配置/内置表），取不到才保留档案 city
+        if camp.get("city"):
+            record_address = str(camp["city"])
+        print("  [地址] address=%s（来源：校区）" % (record_address or "<空>"))
         try:
             prep = swmode.prepare(c, mode, args.dist, campus_lat=clat,
                                   campus_lon=clon, unid=unid,
@@ -1041,7 +1051,7 @@ def cmd_submit(args):
     body, meta = swsubmit.build_record_body(
         track, uid=c.uid, unid=unid, policy=policy, policy_ts=policy_ts,
         min_distance=min_distance, weight=args.weight,
-        face_check=face_check, address=c.identity.city,
+        face_check=face_check, address=record_address,
         sport_type=sport_type, five_point_json=five_point_json,
         with_steps=True)
     print("  mode=%s sportType=%d uuid=%s 距离=%.0fm 时长=%ds 步数=%d"
@@ -1183,6 +1193,9 @@ def build_parser():
     sp.add_argument("--dist", type=float, default=2.2, help="目标距离 km（--mode 时用）")
     sp.add_argument("--campus-lat", type=float, default=None, help="校区中心纬度")
     sp.add_argument("--campus-lon", type=float, default=None, help="校区中心经度")
+    sp.add_argument("--address", default=None,
+                    help="记录 address（城市名，如 揭阳市）；默认取校区城市，"
+                         "再退设备档案 city")
     sp.add_argument("--start", default=None, help="开始时间 'YYYY-MM-DD HH:MM:SS'")
     sp.add_argument("--pace", default="5:40", help="目标配速，如 5:40")
     sp.add_argument("--force-points", action="store_true",

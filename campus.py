@@ -30,7 +30,14 @@ KNOWN_CAMPUS = {
     #   OSM way 1034082727 边界 lat 22.9796788~22.9854105, lon 116.3158811~116.3267198
     #   中心 = (22.9825447, 116.3213004)。旧值 (22.981367, 116.332141) 经 wgs→gcj 换算后
     #   落在校区以东约 500 m（GCJ 116.3367 > 校区东界 116.3313），导致轨迹出校。
-    3305: {"name": "广东工业大学 揭阳校区", "lat": 22.9825447, "lon": 116.3213004},
+    #
+    # ★ `city`：记录 `address` 字段的**权威来源**（见 swcli.py 提交处）。
+    #   ⚠ 2026-09-28 定因：此前 `address` 取的是 `identity.city`（设备档案里的城市），
+    #     而发布包为隐私脱敏把它统一写成「大连市」（_gh_tools/clean_release.py）⇒
+    #     不管在哪个学校跑，记录都显示「大连市」。地址该由**校区**决定，不该由设备决定。
+    #   真机 App 的 address 也是**城市级**（高德反地理编码），如「揭阳市」/「大连市」。
+    3305: {"name": "广东工业大学 揭阳校区", "lat": 22.9825447, "lon": 116.3213004,
+           "city": "揭阳市"},
 }
 
 # 兼容旧引用（run_all 等仍引用这些常量），但不再作为「无条件默认」。
@@ -39,6 +46,7 @@ DEFAULT_CAMPUS = {
     "name": KNOWN_CAMPUS[3305]["name"],
     "lat": KNOWN_CAMPUS[3305]["lat"],
     "lon": KNOWN_CAMPUS[3305]["lon"],
+    "city": KNOWN_CAMPUS[3305].get("city", ""),
     "unid": DEFAULT_UNID,
 }
 
@@ -48,7 +56,11 @@ CAMPUS_FILE = os.path.join(HERE, "campus.json")
 
 
 def load_campus_overrides() -> dict:
-    """读取本地校区覆盖配置（{unid: {lat, lon, name}}），无则空。"""
+    """读取本地校区覆盖配置（{unid: {lat, lon, name, city}}），无则空。
+
+    `city` 可选项：记录 `address` 字段用的城市名（如「揭阳市」）。
+    未填时回退到 `KNOWN_CAMPUS` 的同 unid 条目，再回退到设备档案的 city。
+    """
     if os.path.exists(CAMPUS_FILE):
         try:
             return json.load(open(CAMPUS_FILE, encoding="utf-8"))
@@ -66,7 +78,9 @@ def pick_campus(c, unid: int | None = None, *, campus_name: str | None = None,
                 verbose: bool = True) -> dict:
     """确定本次跑单的校区中心。
 
-    返回 {"name","lat","lon","unid","source"}
+    返回 {"name","lat","lon","city","unid","source"}
+      city: 记录 `address` 字段的来源（城市级，如「揭阳市」）。缺失时为 ""，
+            由调用方决定回退策略（`swcli.py` 会退到 identity.city）。
       source: "none" | "override" | "server-fence" | "known" | "no-coord"
       - "none"     未登录，无任何校区（lat/lon 为 None）
       - "override" 用户在 campus.json 手动校准坐标
@@ -79,7 +93,7 @@ def pick_campus(c, unid: int | None = None, *, campus_name: str | None = None,
     # 未登录：绝不返回默认校区
     logged = bool(c is not None and getattr(c, "uid", 0) and getattr(c, "token", ""))
     if not logged:
-        return {"name": "未登录", "lat": None, "lon": None,
+        return {"name": "未登录", "lat": None, "lon": None, "city": "",
                 "unid": 0, "source": "none"}
 
     overrides = load_campus_overrides()
@@ -89,6 +103,7 @@ def pick_campus(c, unid: int | None = None, *, campus_name: str | None = None,
         o = overrides[str(unid)]
         return {"name": o.get("name") or campus_name or ("校区%d" % unid),
                 "lat": float(o["lat"]), "lon": float(o["lon"]),
+                "city": str(o.get("city") or ""),
                 "unid": unid, "source": "override"}
 
     # ② 服务端围栏（权威）—— 仅当围栏 unid 与当前学生 unid 一致才采用，防拉错校区
@@ -98,6 +113,9 @@ def pick_campus(c, unid: int | None = None, *, campus_name: str | None = None,
             f_unid = int(fence.get("unid") or 0)
             if f_unid == 0 or f_unid == unid:
                 fence["source"] = "server-fence"
+                # 围栏接口不带城市 ⇒ 城市仍从内置表/覆盖配置补
+                if not fence.get("city"):
+                    fence["city"] = _known_city(unid, overrides)
                 return fence
             if verbose:
                 print("[campus] 服务端围栏 unid=%s 与当前学生 unid=%s 不符，忽略"
@@ -111,6 +129,7 @@ def pick_campus(c, unid: int | None = None, *, campus_name: str | None = None,
         k = dict(KNOWN_CAMPUS[unid])
         k["unid"] = unid
         k["source"] = "known"
+        k.setdefault("city", "")
         if verbose:
             print("[campus] 内置已知校区: %s (%.6f, %.6f) unid=%s"
                   % (k["name"], k["lat"], k["lon"], unid))
@@ -118,8 +137,19 @@ def pick_campus(c, unid: int | None = None, *, campus_name: str | None = None,
 
     # ④ 有校名但无坐标（校名准确，坐标需手动校准）
     name = campus_name or ("校区%d" % unid if unid else "未知校区")
-    return {"name": name, "lat": None, "lon": None,
+    return {"name": name, "lat": None, "lon": None, "city": _known_city(unid, overrides),
             "unid": unid, "source": "no-coord"}
+
+
+def _known_city(unid: int, overrides: dict | None = None) -> str:
+    """取某 unid 已知的**城市名**（记录 address 的来源）。取不到返回 ""。"""
+    overrides = overrides if overrides is not None else load_campus_overrides()
+    if unid and str(unid) in overrides:
+        c = overrides[str(unid)].get("city")
+        if c:
+            return str(c)
+    k = KNOWN_CAMPUS.get(int(unid or 0)) or {}
+    return str(k.get("city") or "")
 
 
 def fetch_fence_center(c, *, verbose: bool = True):

@@ -355,24 +355,74 @@ def gen_free_track(campus_lat: float, campus_lon: float, dist_km: float,
 
 
 ANCHOR_MIN_CLEAR_M = 25.0   # 起点距最近打卡点的最小间距
+ANCHOR_ON_RING = True       # True=起点落在闭环上（无引线）；False=落在质心（旧行为）
 
 
 def _pick_anchor(use: list, verbose: bool = True) -> dict:
     """选一个「不压在打卡点上」的起点。
 
-    ★ 为什么不能直接用 `use[0]`：详情页的「起」图钉会**完全遮住**它下面的打卡点标记。
-      旧实现拿 `use[0]` 当起点 ⇒ 起点与第一个打卡点重合 ⇒ 那个 ✓ 在真机上根本看不见
-      （数据层 5 个点全部命中，肉眼只数得到 4 个）。
+    ★ 为什么不能直接用 `use[0]`：详情页的「起」图钉会**完全遮住**它下面的
+      打卡点标记 ⇒ 数据层 5 个点全命中，肉眼只数得到 4 个。
 
-    改成取**所有打卡点的质心**后，起点落在几个点的中间，5 个 ✓ 全都能看见；
-    而轨迹仍会依次经过全部打卡点 —— 生成器是 LOOP 模式（start → 各 cp → start），
-    起点本身不需要是打卡点。
+    ★★ 为什么也不能放在「质心」（2026-09-28 真机复核推翻）：
+      质心在闭环**内部**，而生成器是 LOOP 模式（start → 各 cp → start），
+      于是轨迹必须从环心**进出一次** ⇒ 地图上多出一根长度≈环半径的**引线**
+      （实测：环半径 R≈48m，轨迹点距环心中位 47.9m 但 min 0.0m，
+      半径<15m 的点有 10/143）⇒ 整条轨迹不再是一个干净的环/椭圆。
+      参考图（真实跑者）里「起」「终」是**压在跑道线上**的，没有引线。
 
-    质心离最近打卡点不足 `ANCHOR_MIN_CLEAR_M` 时回退到 `use[0]`（并告警）。
+    ⇒ 现在把起点放在**闭环上**：取相邻打卡点之间的**最大方位角空隙**的中点方向，
+      半径用空隙两端打卡点半径的均值 ⇒ 起点既落在环上（无引线），
+      又离最近打卡点 ≥ `ANCHOR_MIN_CLEAR_M`（不遮标记）。
+      实测本校区：最大空隙 85°，落点距最近打卡点 32.3m ≥ 25m ✅
+
+    兵底：点位数 < 3、或算出的落点间距不足时，退回「质心」→ 再退回 `use[0]`。
     """
     n = len(use)
+    if n == 0:
+        raise ValueError("打卡点为空")
+
+    # 米制等距投影（几十米量级，此处误差可忽略）
     lat0 = sum(p["lat"] for p in use) / n
     lon0 = sum(p["lon"] for p in use) / n
+    kx = math.cos(math.radians(lat0))
+
+    def _ll2xy(la, lo):
+        return (math.radians(lo - lon0) * EARTH_R * kx,
+                math.radians(la - lat0) * EARTH_R)
+
+    def _xy2ll(x, y):
+        return (lat0 + math.degrees(y / EARTH_R),
+                lon0 + math.degrees(x / (EARTH_R * kx)))
+
+    xy = [_ll2xy(p["lat"], p["lon"]) for p in use]
+    cx = sum(q[0] for q in xy) / n
+    cy = sum(q[1] for q in xy) / n
+
+    if ANCHOR_ON_RING and n >= 3:
+        ang = [math.atan2(q[1] - cy, q[0] - cx) for q in xy]
+        rad = [math.hypot(q[0] - cx, q[1] - cy) for q in xy]
+        idx = sorted(range(n), key=lambda k: ang[k])
+        gaps = [(ang[idx[(k + 1) % n]] - ang[idx[k]]) % (2 * math.pi)
+                for k in range(n)]
+        gi = max(range(n), key=lambda k: gaps[k])
+        mid = ang[idx[gi]] + gaps[gi] / 2.0
+        i0, i1 = idx[gi], idx[(gi + 1) % n]
+        r_loc = (rad[i0] + rad[i1]) / 2.0
+        ax, ay = cx + r_loc * math.cos(mid), cy + r_loc * math.sin(mid)
+        alat, alon = _xy2ll(ax, ay)
+        d = min(haversine(alat, alon, p["lat"], p["lon"]) for p in use)
+        if d >= ANCHOR_MIN_CLEAR_M:
+            if verbose:
+                print("  [起点] 落在闭环上（最大角空隙 %.0f°，距最近打卡点 %.1fm）"
+                      % (math.degrees(gaps[gi]), d))
+            return {"pointName": "起点", "lat": alat, "lon": alon,
+                    "radius": use[0].get("radius", 15.0)}
+        if verbose:
+            print("  [起点] ⚠ 环上落点距最近打卡点仅 %.1fm（< %.0fm），退回质心"
+                  % (d, ANCHOR_MIN_CLEAR_M))
+
+    # 兵底：质心
     d = min(haversine(lat0, lon0, p["lat"], p["lon"]) for p in use)
     if d < ANCHOR_MIN_CLEAR_M:
         if verbose:
