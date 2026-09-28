@@ -962,6 +962,20 @@ def cmd_submit(args):
     pd = pbiz.get("data") or {}
     rule = pd.get("runRuleModel") or {}
     policy = int(pd.get("policy") or 0)
+    # ★★★ 计分跑默认 policy=0（2026-09-28 真机定因）★★★
+    #   详情页「✓ 打卡点」画不画，只取决于**记录自身**的 `policy`（服务端原样存下
+    #   提交体里这个字段）：
+    #     policy=1 → 详情页【不画】✓ 打卡点
+    #     policy=0 → 详情页【画】✓ 打卡点（绿底 ✓；必经点画成橙黄）
+    #   真机 A/B（同校区 unid=3305）：
+    #     · rrid 1327337940（--policy 0）→ 5 个 ✓ 全出现 ✅
+    #     · rrid 1327194325（policy=1）  → 0 个 ✓
+    #   且 `_gh_tools/fixtures/obs_probe_*.json` 里真机自己写的计分跑记录也是
+    #   policy=0（1323338948 policy=0 画 148 个 ✓；1323338294 policy=1 不画）。
+    #   ⚠ `runModePolicy(runMode=1)` 返回的 policy=1 是**开跑前界面**的口径，
+    #     不是记录侧该落的值 —— 两者语义不同，别直接照抄。
+    if mode == "score" and getattr(args, "policy", None) is None:
+        policy = 0
     # 允许命令行覆盖 policy（用于判定跑法判别字段）
     if getattr(args, "policy", None) is not None:
         policy = int(args.policy)
@@ -996,14 +1010,24 @@ def cmd_submit(args):
     if getattr(args, "sport_type", None) is not None:
         sport_type = int(args.sport_type)
     # 五点（真实打卡点）：仅计分跑传 fivePointJson；自由跑无围栏无打卡点 → 不传
-    # ★ 围栏（2026-09-27 真机定因）：详情页「围栏范围」画的是**记录自身的
-    #   geoFencesJson**（RunHistoryDetailPImpl.getObsData → drawGeoFence →
-    #   Gson.fromJson(List)）。以前恒填 "[]" → 详情页没有围栏可画。
-    #   这里拉一次学校围栏，同时喂给提交体与 OBS 对象（单一实现见
-    #   swsubmit.norm_geo_fences）。拉取失败只警告，不阻塞提交。
+    # ★★ 围栏来源（2026-09-28 真机定因，务必别再走回头路）：
+    #   详情页「围栏范围」画的是**记录自身的 geoFencesJson**，而 App 自己那份围栏
+    #   来自 `runModePolicy(runMode=1)` 的 `data.geoFence`（点键名 `lat/lng/glat/glng`）。
+    #   旧代码走 `getGeoFenceForRun` —— 实测该接口在本校区**返回空** ⇒ 记录里恒为
+    #   `"[]"` ⇒ 详情页没有围栏可画（此前只能靠手改 OBS 验证）。
+    #   ⇒ 这里优先取 runModePolicy 里那份（反正已经拉了），空才退回 getGeoFenceForRun。
+    #   拉取失败只警告，不阻塞提交。单一实现见 swsubmit.norm_geo_fences。
     geo_fences = []
     if is_score:
-        geo_fences = swsubmit.fetch_geo_fences(c.call)
+        geo_fences = swsubmit.geo_fences_from_policy(pd)
+        if geo_fences:
+            print("  [围栏] runModePolicy 下发 %d 个围栏 / %d 个顶点"
+                  " → geoFencesJson 已填充"
+                  % (len(geo_fences),
+                     sum(len(g["points"]) for g in geo_fences)))
+        else:
+            print("  [围栏] runModePolicy 未带围栏 → 退回 getGeoFenceForRun")
+            geo_fences = swsubmit.fetch_geo_fences(c.call)
     five_point_json = ""
     if is_score and prep.get("points"):
         try:
@@ -1175,7 +1199,8 @@ def build_parser():
     sp.add_argument("--sport-type", type=int, default=None,
                     help="覆盖 sportType（默认 free=1 / score=5）")
     sp.add_argument("--policy", type=int, default=None,
-                    help="覆盖提交体 policy（默认取 runModePolicy 返回）")
+                    help="覆盖提交体 policy（计分跑默认 0=详情页画 ✓ 打卡点；"
+                         "1=不画）")
     sp.add_argument("--run-mode", type=int, default=None,
                     help="runModePolicy 的 runMode（1=计分/校园跑；0=自由跑口径）")
     sp.set_defaults(func=cmd_submit)

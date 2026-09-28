@@ -449,6 +449,116 @@ def _track_gcj(pts: list) -> list:
     return [swobs.wgs84_to_gcj02(float(q["lat"]), float(q["lon"])) for q in pts]
 
 
+# ★★★ 闭环「留口」—— 让详情页的「起」「终」两个图钉不重叠 ★★★
+#
+# ⚠ 2026-09-28 更正：起/终 画不画**不是**由「首末间距」决定的（原判断是错的）。
+#   真正的开关是轨迹点的 **`type` 标记位**：首点 type=5 → 画「起」，
+#   末点 type=6 → 画「终」（见 `swobs.START_PT_TYPE` / `END_PT_TYPE`）。
+#   真机 A/B：只改 type ⇒ 两个图钉都出现；只改 state/radius/count/bdA… ⇒ 一个都不出现。
+#   间距无关的实证：gap=101.36m 不画、96.40m 不画，而目标图里 gap 仅 ~35m 却有。
+#
+#   但「留口」这件事仍然要做 —— 生成器产出的闭环是**像素级重合**的
+#   （历史 OBS 实测 gap 全部 0.00m），首末落在同一像素 ⇒ 两个图钉**完全重叠**，
+#   肉眼只看得见后画的「终」，「起」被盖住。
+#   真机记录的自然 gap 是 118.83m / 2159m（≈5.5%）。
+#
+# ⇒ 把闭环末点沿路径**回退 LOOP_TAIL_GAP_M 米**，把首末拉开到肉眼可分辨：
+#     真机实拍 —— gap=110m 时两个图钉清晰分开、与目标图观感一致。
+#
+# ★★ 与 `verify_track` 的顺序（很重要）：
+#   `prepare()` 现在**先校验完整闭环、再留口** —— 闭合判据保持 20m 严阈值，
+#   专门用来抓「生成器没绕回起点」这类真 bug；留口是**校验通过之后**的展示层修饰。
+#   （旧实现是「先留口、再校验」，逼得 gap 只能 < 20m，两个图钉挤在一起分不开。）
+LOOP_TAIL_GAP_M = 50.0
+
+
+def open_loop_tail(path: str, gap_m: float = LOOP_TAIL_GAP_M,
+                   verbose: bool = True) -> dict:
+    """**确保**闭环首末相距至少 `gap_m` 米（把末点沿路径回退）。
+
+    语义是 `ensure(gap >= gap_m)` —— **不是**「小于某值才动」：
+      · 首末已 ≥ gap_m ⇒ 原样返回（**幂等**：连调两次不会越推越远）
+      · 否则沿路径回退到首末 ≈ gap_m（末点线性插值，保留 speed/ele/dist 字段）
+
+    ★ 为什么必须是「至少」而不是「恰好」：**生成器自身的闭合缝就有 5~11m**
+      （`generator/rungen/engine.py` 的 LOOP 锚点，实测 8.2m）。旧实现写的是
+      「首末 ≥ 5m 就不动」，会把这个 8m 的缝当成「本来就是开口轨迹」而放过
+      ⇒ 详情页两个图钉仍然挤在一起分不开（= 白改）。
+
+    返回 {"before_m","after_m","dropped","points"}；轨迹 JSON 就地改写。
+    """
+    t = json.load(open(path, encoding="utf-8"))
+    pts = t.get("points") or []
+    rep = {"before_m": None, "after_m": None, "dropped": 0,
+           "points": len(pts)}
+    if len(pts) < 3:
+        return rep
+    rep["before_m"] = haversine(pts[0]["lat"], pts[0]["lon"],
+                                pts[-1]["lat"], pts[-1]["lon"])
+    if rep["before_m"] >= gap_m:
+        rep["after_m"] = rep["before_m"]
+        return rep
+
+    # 沿路径累积里程
+    seg = [0.0] * len(pts)
+    for i in range(1, len(pts)):
+        seg[i] = seg[i - 1] + haversine(pts[i - 1]["lat"], pts[i - 1]["lon"],
+                                        pts[i]["lat"], pts[i]["lon"])
+    target = seg[-1] - gap_m
+    if target <= 0:
+        # 轨迹总长比 gap_m 还短：只留首末两点（尽力而为）
+        keep = [pts[0], dict(pts[-1])]
+        for i, p in enumerate(keep):
+            p["i"] = i
+        t["points"] = keep
+        json.dump(t, open(path, "w", encoding="utf-8"),
+                  ensure_ascii=False, separators=(",", ":"))
+        rep["points"] = len(keep)
+        rep["dropped"] = len(pts) - len(keep)
+        rep["after_m"] = haversine(keep[0]["lat"], keep[0]["lon"],
+                                   keep[-1]["lat"], keep[-1]["lon"])
+        if verbose:
+            print("  [留口] 轨迹总长 %.0fm < %.0fm，只留首末两点"
+                  % (seg[-1], gap_m))
+        return rep
+
+    k = 1
+    while k < len(pts) - 1 and seg[k] < target:
+        k += 1
+    span = seg[k] - seg[k - 1]
+    f = 0.0 if span <= 0 else (target - seg[k - 1]) / span
+
+    def _lerp(a, b):
+        return float(a) + (float(b) - float(a)) * f
+
+    tail = dict(pts[k])                     # 保留 speed/cadence 等原始字段
+    tail["lat"] = _lerp(pts[k - 1]["lat"], pts[k]["lat"])
+    tail["lon"] = _lerp(pts[k - 1]["lon"], pts[k]["lon"])
+    tail["ts"] = int(round(_lerp(pts[k - 1]["ts"], pts[k]["ts"])))
+    if "time" in tail:                      # 与 ts 保持一致（生成器会写这个串）
+        tail["time"] = time.strftime("%H:%M:%S",
+                                     time.localtime(tail["ts"] / 1000.0))
+    if "ele" in tail:
+        tail["ele"] = _lerp(pts[k - 1].get("ele", 0), pts[k].get("ele", 0))
+    if "dist" in tail:
+        tail["dist"] = _lerp(pts[k - 1].get("dist", 0), pts[k].get("dist", 0))
+
+    keep = pts[:k] + [tail]                 # 丢掉 k 之后的点，末点即插值点
+    rep["dropped"] = len(pts) - len(keep)
+    for i, p in enumerate(keep):            # 重新编号（OBS 的 id 取 p["i"]）
+        p["i"] = i
+    t["points"] = keep
+    json.dump(t, open(path, "w", encoding="utf-8"),
+              ensure_ascii=False, separators=(",", ":"))
+    rep["points"] = len(keep)
+    rep["after_m"] = haversine(keep[0]["lat"], keep[0]["lon"],
+                               keep[-1]["lat"], keep[-1]["lon"])
+    if verbose:
+        print("  [留口] 闭环末点沿路径回退 %.0fm：首末 %.2fm → %.2fm"
+              % (gap_m, rep["before_m"], rep["after_m"]))
+    return rep
+
+
 def verify_track(path: str, points: list = None, verbose: bool = True) -> dict:
     """校验轨迹是否经过全部【必经点】、是否闭合。
 
@@ -531,18 +641,29 @@ def prepare(c, mode: str, dist_km: float, *, campus_lat: float = None,
     campus_lon = campus_lon if campus_lon is not None else getattr(c, "campus_lon", None)
     res = {"mode": mode, "track": None, "points": [], "warn": None}
 
+    # ★★ 留口补偿：`open_loop_tail` 会从轨迹**尾部**去掉 LOOP_TAIL_GAP_M 米
+    #    ⇒ 生成时先把这段补回来，保证「请求 2.0km 就真的交 2.0km」。
+    #    不补的后果：请求 2.0km 实得 1.95km，可能撞上服务端最小距离（2000m）而提交失败。
+    #    距离与时长同源（都从轨迹算），所以补距离后时长自动一致，不需要单独补。
+    gen_km = dist_km + LOOP_TAIL_GAP_M / 1000.0
+    if verbose and LOOP_TAIL_GAP_M:
+        print("  [留口补偿] 目标 %.3fkm + 留口 %.0fm ⇒ 生成 %.3fkm"
+              % (dist_km, LOOP_TAIL_GAP_M, gen_km))
+
     if mode == "free":
         if campus_lat is None or campus_lon is None:
             raise ValueError("自由跑需要校区坐标 --campus-lat/--campus-lon")
         if verbose:
             print("--- 模式: 自由跑（校园范围内，无需打卡点）---")
-        res["track"] = gen_free_track(campus_lat, campus_lon, dist_km,
+        res["track"] = gen_free_track(campus_lat, campus_lon, gen_km,
                                       start=start, pace=pace,
                                       cadence=cadence, seed=seed,
                                       outdir=outdir, verbose=verbose)
         if verbose:
             print("  [校验] 闭合性")
+        # ★ 顺序：先校验**完整闭环**（20m 严阈值），再留口（展示层修饰）
         verify_track(res["track"], None, verbose=verbose)
+        open_loop_tail(res["track"], verbose=verbose)
         return res
 
     # ── score ──────────────────────────────────────────────
@@ -570,12 +691,14 @@ def prepare(c, mode: str, dist_km: float, *, campus_lat: float = None,
         res["warn"] = (res["warn"] or "") + " [打卡点接口限流，使用旧缓存]"
 
     res["points"] = pts
-    res["track"] = gen_score_track(pts, dist_km, start=start, pace=pace,
+    res["track"] = gen_score_track(pts, gen_km, start=start, pace=pace,
                                    cadence=cadence, seed=seed,
                                    outdir=outdir, verbose=verbose)
     if verbose:
         print("  [校验] 必经点命中 & 闭合性")
+    # ★ 顺序：先校验**完整闭环**（20m 严阈值），再留口（展示层修饰）
     rep = verify_track(res["track"], pts, verbose=verbose)
+    open_loop_tail(res["track"], verbose=verbose)
     if not rep["ok"]:
         res["warn"] = (res["warn"] or "") + " [轨迹未完全通过必经点/未闭合]"
     return res

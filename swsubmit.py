@@ -92,15 +92,28 @@ def signature(values: dict, has_room_id: bool = False) -> str:
 def five_point_payload(points: list, start_ms: int) -> list:
     """五点实体（跑完态 isPass=true）。
 
-    与参考工具 wire.rs 一致：
-      · glat/glon 优先用服务端下发的 GCJ 坐标（存在时），否则用 lat/lon 转；
-      · pointName/isFixed/radius 原样带；
-      · position 固定 999（跑完态不在途）。
+    ★★★ 2026-09-28 真机 ground truth（5 条真机记录逐一比对，务必读）★★★
+      真机 App 自己写的记录里，`fivePointJson` 每个元素的键是：
+
+          flag, glat, glon, id, isFixed, isPass, lat, **lng**, pointName,
+          position, state          ← 注意是 `lng`，**没有** radius
+
+      我们旧版写的是 `lat` + **`lon`** ⇒ App 的 Bean 字段 `lng` 取不到值
+      ⇒ 经度 = 0 ⇒ 每个打卡点都被画到 **(lat, 0)**（几内亚湾，屏幕外）
+      ⇒ 详情页上一个绿底 ✓ 圆标都不出现。
+      实测：真机记录 148~152 个点的 `lng` 全有值；我们 5 个点全是 `lon`。
+
+      ★ 别和「服务端打卡点接口」搞混：`getFixedPoint*` 返回的点位用 `lon`，
+        记录侧 `fivePointJson` 用 `lng` —— 两套实体、两个字段名（串表里
+        `, lon=` 与 `, lng=` 都存在，分别属于不同 Bean）。
+
+    glat/glon 优先用服务端下发的 GCJ 坐标（存在时），否则用 lat/lon 转；
+    pointName/isFixed/radius 原样带；position 固定 999（跑完态不在途）。
     """
     out = []
     for i, p in enumerate(points):
         lat = float(p.get("lat", 0) or 0)
-        lon = float(p.get("lon", 0) or 0)
+        lon = float(p.get("lon", p.get("lng", 0)) or 0)
         glat = float(p.get("glat", p.get("gLat", 0)) or 0)
         glon = float(p.get("glon", p.get("gLng", 0)) or 0)
         if not (glat or glon) and (lat or lon):
@@ -118,7 +131,8 @@ def five_point_payload(points: list, start_ms: int) -> list:
             "isFixed": int(p.get("isFixed", 0) or 0),
             "isPass": True,
             "lat": round_to(lat, 7),
-            "lon": round_to(lon, 7),
+            # ★ 真机字段名是 `lng`（不是 `lon`）—— 写错经度就变 0，打卡点画到 (0,0)
+            "lng": round_to(lon, 7),
             "pointName": p.get("pointName", "") or "",
             "position": 999,
             "radius": float(p.get("radius", 0) or 0),
@@ -152,26 +166,47 @@ def five_point_wrapper(points: list, start_ms: int,
 # 围栏（geoFencesJson）—— 详情页「围栏范围」的数据源
 # ══════════════════════════════════════════════════════════════════
 def norm_geo_fences(geo_fences: list) -> list:
-    """把服务端 getGeoFenceForRun 的 geoFences 规整成记录侧最小结构。
+    """把服务端 getGeoFenceForRun 的 geoFences 规整成记录侧结构。
 
-    ★★ 2026-09-27 真机定因（logcat 里 App 自己的 Gson 堆栈，非推测）★★
-        RunHistoryDetailPImpl.getObsData
-          → ObsClient.download
-          → RunHistoryDetailPImpl.drawGeoFence
-          → Gson.fromJson(..., <Collection>)     ← CollectionTypeAdapterFactory
-        抛 java.lang.IllegalStateException:
-             Expected BEGIN_ARRAY but was BEGIN_OBJECT at line 1 column 2
-      ⇒ `geoFencesJson` 必须是 **JSON 数组**，即
-            [{"id":"2351","points":[{"lat":…,"lon":…}, …]}]
-        **不是** {"updateTime":…,"geoFences":[…]} 那种对象。
+    ★★ 2026-09-27 真机定因（两轮判别实验，务必读清楚）★★
 
-      实测对照（同一条记录，只改这一个字段）：
-        · 填对象 → Gson 抛异常，drawGeoFence 中断，**连轨迹都不画**（地图空白）
-        · 填数组 → 围栏多边形 + 轨迹 + 打卡点标记**全部出现**
-      ⇒ 旧代码恒填 "[]"（合法空数组）所以不报错，但也就没有围栏可画。
+    **字段类型**：`fixed_point_json` 被 `Gson.fromJson(text, Bean)` 反序列化，
+    而该 Bean 的 `fivePointJson` / `geoFencesJson` 两个字段**都声明为 String**。
+    真机 logcat 逐字段实证：
+      · 两个都写数组 → `Expected a string but was BEGIN_ARRAY
+                       … path $.fivePointJson`（fivePointJson 排在前，先炸）
+      · five=str / geo=array → 同样的异常，但 path 变成 `$.geoFencesJson`
+    ⇒ **两个字段都必须是「字符串」，字符串内容才是 JSON 数组文本** `[{…}]`。
+      （`path $` ≠ 「值要被单独 fromJson」；真实 App 自己写的记录里这两个
+        字段也全是 str，见 `_gh_tools/dump_records.py` 的字段类型 dump。）
 
-    ★ 坐标：服务端点位的 glon/glat 才是真值（GCJ-02），lon/lat 恒为 0.0。
-      详情页底图是高德（GCJ-02），所以记录侧 lat/lon 直接取 glat/glon。
+    ★ 教训（同类错误第 4 次「对照组不成立」）：`fivePointJson` 在 JSON 里
+      排在 `geoFencesJson` 前面 ⇒ 只要它类型错，解析就在它那一步中断，
+      `geoFencesJson` 的类型**从未被真正验证**。之前据此推出的
+      「两个都是数组」是错的；本轮把 five 改回 str 后，错误 path 立刻
+      移到 `$.geoFencesJson`，才把它单独验出来。
+
+    ★★★ 点位字段名：**必须是客户端 Bean 的 `lng` / `glng`**（2026-09-28 真机定因）★★★
+      真机 App 自己用的那份围栏来自 `runModePolicy(runMode=1)` 的 `data.geoFence`：
+
+          {"lat":0.0,"lng":0.0,"glat":22.982321,"glng":116.330092}
+
+      ⇒ 客户端 `GeoFencesPointBean` 的字段名是 **`lng` / `glng`**，
+        且 `lat/lng` 恒 0.0、真值全在 `glat/glng`（GCJ-02）。
+
+      ⚠ 服务端 `getGeoFenceForRun` 返回的却是 `lon`/`glon` —— **那是服务端 DTO**，
+        客户端 Bean 读不到 `glon` ⇒ 经度 = 0 ⇒ 十个顶点塌到 `(lat, 0)` ⇒
+        多边形退化 ⇒ **Gson 解析成功、不抛异常、却什么也画不出来**。
+        这与 `fivePointJson` 的 `lon`→`lng` 是同一类错误（两套 Bean、两套字段名）。
+
+      真机 A/B（同一条 policy=1 记录，只改这一个变量）：
+        · `glat`+`glon`（旧写法）→ 无围栏
+        · `glat`+`glng`（本写法）→ **围栏多边形正常出现** ✅
+
+      ★ 注意别和 `fivePointJson` 混：那边的点是
+        `{flag, glat, glon, id, isFixed, isPass, lat, lng, pointName, position, state}`
+        —— 用的是 **`glon`**（已验证能画）。两个 Bean 的字段名不同，别互抄。
+
     ★ id 转字符串：串表里 `GeoFencesBean{id='` 带引号（String 字段）。
     """
     out = []
@@ -179,19 +214,26 @@ def norm_geo_fences(geo_fences: list) -> list:
         if not isinstance(f, dict):
             continue
         pts = []
-        for p in (f.get("points") or []):
+        for i, p in enumerate(f.get("points") or []):
             if not isinstance(p, dict):
                 continue
-            lat = p.get("lat") or 0.0
-            lon = p.get("lon") or 0.0
-            if not lat or not lon:              # 服务端就是 0.0 → 用 GCJ 兜底
-                lat = p.get("glat") or lat
-                lon = p.get("glon") or lon
+            glat = p.get("glat") or p.get("lat") or 0.0
+            glon = p.get("glon") or p.get("glng") or p.get("lon") or p.get("lng") or 0.0
             try:
-                pts.append({"lat": round(float(lat), 6),
-                            "lon": round(float(lon), 6)})
+                glat, glon = float(glat), float(glon)
             except (TypeError, ValueError):
                 continue
+            if glat == 0.0 and glon == 0.0:
+                continue
+            pts.append({
+                # ★ 照抄 runModePolicy 里 geoFence 的原始键名与取值：
+                #   lat/lng 恒 0.0，真值在 glat/glng（GCJ-02）
+                "lat": 0.0,
+                "lng": 0.0,
+                "glat": round(glat, 7),
+                "glng": round(glon, 7),
+                "pointsNumber": i + 1,
+            })
         if not pts:                             # 空围栏不落盘（画不出任何东西）
             continue
         item = {"id": str(f.get("id")), "points": pts,
@@ -203,13 +245,52 @@ def norm_geo_fences(geo_fences: list) -> list:
 
 
 def geo_fences_json(geo_fences: list) -> str:
-    """记录侧 `geoFencesJson` 字符串（**数组**，见 norm_geo_fences 的定因）。"""
+    """记录侧 `geoFencesJson` **字符串**（内容为 JSON 数组文本）。
+
+    ★ OBS 的 `fixed_point_json.geoFencesJson` 就必须是这个字符串形态
+      （Bean 字段声明为 String）——真机定因见 `norm_geo_fences`。
+    """
     return json.dumps(norm_geo_fences(geo_fences), separators=(",", ":"),
                       ensure_ascii=False)
 
 
+def geo_fences_from_policy(pd: dict) -> list:
+    """从 `runModePolicy` 的响应里取围栏 —— **这是真机 App 自己用的那份**。
+
+    ★★★ 2026-09-28 真机定因（关键）★★★
+      `POST /api/v70103/runModePolicy` 的 `data.geoFence` 形如
+
+          {"updateTime": 1790305529784,
+           "geoFences": [{"id":2351,"name":"围栏","points":[
+                 {"lat":0.0,"lng":0.0,"glat":22.982321,"glng":116.330092}, …]}]}
+
+      这才是 App 开跑前拿到、并用于详情页画围栏的那份（`runMode=1` 时非空）。
+      而 `getGeoFenceForRun` 实测**返回空** ⇒ 我们旧代码恒得到 `[]`
+      ⇒ 记录里 `geoFencesJson="[]"` ⇒ 详情页没有围栏可画（只能靠手改 OBS 验证）。
+
+      ⇒ 提交时**优先用这里**；`fetch_geo_fences` 降级为兜底。
+    """
+    if not isinstance(pd, dict):
+        return []
+    gf = pd.get("geoFence")
+    if isinstance(gf, str):
+        try:
+            gf = json.loads(gf)
+        except Exception:
+            return []
+    if not isinstance(gf, dict):
+        return []
+    fences = gf.get("geoFences")
+    if not isinstance(fences, list) or not fences:
+        return []
+    return norm_geo_fences(fences)
+
+
 def fetch_geo_fences(call_fn, verbose: bool = True) -> list:
-    """拉学校围栏：POST /api/v1/getGeoFenceForRun，body "{}"（实测空 body 即可）。
+    """拉学校围栏（**兜底**）：POST /api/v1/getGeoFenceForRun，body "{}"。
+
+    ★ 首选 `geo_fences_from_policy(runModePolicy 的 data)` —— 实测这个接口
+      在本校区返回空，只有 runModePolicy 里那份才是 App 真正用的（见上）。
 
     ★ 任何失败都返回 []（提交照旧进行），只在 verbose 时说明原因 ——
       围栏缺失只影响详情页画不画围栏，绝不该让一次跑步提交失败。
@@ -587,6 +668,41 @@ def selftest() -> bool:
     ok &= o1.startswith(pref)
     print("  %s originalSign 含 goalId=null" % ("OK " if "goalId=null" in o1 else "FAIL"))
     ok &= "goalId=null" in o1
+
+    # ★★ 围栏：来源 = runModePolicy 的 data.geoFence（App 自己用的那份），
+    #    输出键名 = 客户端 Bean 的 glat/glng（不是服务端 DTO 的 glon）。
+    #    2026-09-28 真机 A/B 定因；这里正反两面都守。
+    pd = {"policy": 1, "geoFence": {
+        "updateTime": 1790305529784,
+        "geoFences": [{"id": 2351, "name": "围栏", "points": [
+            {"lat": 0.0, "lng": 0.0, "glat": 22.982321, "glng": 116.330092},
+            {"lat": 0.0, "lng": 0.0, "glat": 22.980760, "glng": 116.330015}]}]}}
+    gf = geo_fences_from_policy(pd)
+    p0 = gf[0]["points"][0] if gf else {}
+    c_fence = (len(gf) == 1 and len(gf[0]["points"]) == 2
+               and p0.get("glat") == 22.982321
+               and p0.get("glng") == 116.330092
+               and p0.get("lat") == 0.0 and p0.get("lng") == 0.0
+               and "glon" not in p0 and gf[0]["id"] == "2351")
+    print("  %s 围栏取自 runModePolicy.data.geoFence，键名 glat/glng、id 转字符串"
+          % ("OK " if c_fence else "FAIL"))
+    ok &= c_fence
+
+    pd2 = {"geoFence": {"geoFences": [{"id": 1, "points": [
+        {"lat": 0.0, "lon": 0.0, "glat": 22.1, "glon": 116.1}]}]}}
+    q0 = geo_fences_from_policy(pd2)[0]["points"][0]
+    c_fence2 = (q0["glat"] == 22.1 and q0["glng"] == 116.1
+                and "glon" not in q0)
+    print("  %s 变异自检：服务端拼写 glon 输入 → 输出必须是 glng"
+          % ("OK " if c_fence2 else "FAIL"))
+    ok &= c_fence2
+
+    c_fence3 = all(geo_fences_from_policy(b) == [] for b in
+                   [None, {}, {"geoFence": None},
+                    {"geoFence": {"geoFences": []}}, {"geoFence": "x"}])
+    print("  %s 围栏退化输入安全返回 []（不抛异常）"
+          % ("OK " if c_fence3 else "FAIL"))
+    ok &= c_fence3
     return ok
 
 

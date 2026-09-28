@@ -53,6 +53,41 @@ def bd09_to_gcj02(bd_lat: float, bd_lng: float):
     return z * math.sin(theta), z * math.cos(theta)
 
 
+def gcj02_to_bd09(gcj_lat: float, gcj_lng: float):
+    """高德 GCJ-02 → 百度 BD-09（`bd09_to_gcj02` 的数值反函数）。
+
+    用牛顿迭代求根（正变换闭式可导），往返误差 < 1e-9 度（≈0.1 m），
+    对「同时填 glat/glon 与 lat/lon 两套坐标」完全够用。
+    """
+    def resid(blat, blng):
+        a, b = bd09_to_gcj02(blat, blng)
+        return a - gcj_lat, b - gcj_lng
+
+    blat, blng = gcj_lat, gcj_lng
+    h = 1e-8
+    for _ in range(30):
+        f1, f2 = resid(blat, blng)
+        if abs(f1) < 1e-11 and abs(f2) < 1e-11:
+            break
+        # 数值雅可比（中心差分）
+        j11 = (resid(blat + h, blng)[0] - resid(blat - h, blng)[0]) / (2 * h)
+        j12 = (resid(blat, blng + h)[0] - resid(blat, blng - h)[0]) / (2 * h)
+        j21 = (resid(blat + h, blng)[1] - resid(blat - h, blng)[1]) / (2 * h)
+        j22 = (resid(blat, blng + h)[1] - resid(blat, blng - h)[1]) / (2 * h)
+        det = j11 * j22 - j12 * j21
+        if abs(det) < 1e-18:
+            break
+        d1 = -(f1 * j22 - j12 * f2) / det
+        d2 = -(j11 * f2 - f1 * j21) / det
+        blat += d1
+        blng += d2
+    # 残差自检：没收敛就退回原值（GCJ 当 BD 用，误差数百米但不会更糟）
+    r1, r2 = resid(blat, blng)
+    if abs(r1) > 1e-6 or abs(r2) > 1e-6:
+        return gcj_lat, gcj_lng
+    return blat, blng
+
+
 def wgs84_to_gcj02(lat: float, lng: float):
     """WGS-84 → GCJ-02（中国国测局偏移）。生成器输出的是标准坐标，
     提交时需先转成 GCJ-02 才能在 App 地图上落到正确位置。"""
@@ -167,11 +202,24 @@ def round_to(v: float, nd: int) -> float:
 # ══════════════════════════════════════════════════════════════════
 # 27 键协议点集（gen 点 → OBS 点）
 # ══════════════════════════════════════════════════════════════════
-def conv_point(p: dict, start_ms: int) -> dict:
+# ★★ 轨迹点 `type` 标记位 —— 详情页「起」「终」图钉的**唯一开关**
+#    2026-09-28 真机 A/B 定因（同一台手机、同一条记录、只翻一个字段）：
+#      · 首点 type=5 → 画蓝色「起」；末点 type=6 → 画橙红「终」；其余 type=1
+#      · 对照组（只改 state/radius/count/bdA/bdD/bdG/bdS/gainTime/id）→ 一个都不画
+#    真机记录 `1321841637` 的 type 序列里 `5`/`6` 也**各只出现一次**，位置就在轨迹两端。
+#    ★ 与「首末间距(gap)」无关：gap=101.36m 不画、96.40m 不画，而目标图里 gap 仅 ~35m 却有。
+START_PT_TYPE = 5
+END_PT_TYPE = 6
+
+
+def conv_point(p: dict, start_ms: int, pt_type: int = 1) -> dict:
     """生成器点 → OBS 协议点（27 键）。
 
     生成器给的是 WGS-84 坐标，提交需 GCJ-02。
     若坐标为 (0,0) 视为无效点，gLat/gLng 置 -1。
+
+    pt_type：轨迹点 `type` 标记位，默认 1（普通点）。首/末点由
+      `build_obs_object` 传 START_PT_TYPE / END_PT_TYPE（见上方常量注释）。
     """
     lat, lng = float(p.get("lat", 0) or 0), float(p.get("lon", 0) or 0)
     if lat == 0.0 and lng == 0.0:
@@ -211,7 +259,7 @@ def conv_point(p: dict, start_ms: int) -> dict:
         "stepDistance": 0.0,
         "totalDis": round_to(dist, 4),
         "totalTime": int(round(t_rel)),
-        "type": 1,
+        "type": int(pt_type),
         "validDis": round_to(dist, 4),
         "validTime": int(round(t_rel)),
     }
@@ -379,7 +427,7 @@ def five_point_payload(points: list, start_ms: int) -> list:
     """五点实体（跑完态 isPass=true）。
 
     ★★ 只接受【服务端下发的打卡点】，绝不接受轨迹点 ★★
-      · 自由跑：无围栏、无打卡点 → 传 []，fivePointJson 序列化为 "[]"
+      · 自由跑：无围栏、无打卡点 → 传 []，fivePointJson = []（空数组）
       · 计分跑：传学校下发的点位（通常 3~5 个，isFixed=1 为必经点）
 
     历史 bug（已修）：本函数原先对【轨迹点】逐点生成 isPass=true 的"假打卡点"，
@@ -395,15 +443,62 @@ def five_point_payload(points: list, start_ms: int) -> list:
     return swsubmit.five_point_payload(points, start_ms)
 
 
-def geo_fences_json(geo_fences: list) -> str:
-    """记录侧 `geoFencesJson` 字符串（**JSON 数组**）。
+def five_points_list(points: list, start_ms: int) -> list:
+    """记录侧 `fivePointJson` 的**数组值**（list）。
 
-    字段实现委托给 swsubmit.geo_fences_json，保证提交 body 与 OBS 对象里
-    的 geoFencesJson 结构完全一致（单一实现，避免两份漂移）。
-    定因（App 的 Gson 要求 BEGIN_ARRAY）见 swsubmit.norm_geo_fences。
+    ★★ 2026-09-27 真机定因：OBS 的 `fixed_point_json` 被
+      `Gson.fromJson(text, Bean)` 反序列化，Bean 的 `fivePointJson` 字段
+      声明为 **String** ⇒ OBS 里的值必须是**字符串**（内容才是数组文本）。
+      真机两轮判别实证（错误 path 从 `$.fivePointJson` 移到 `$.geoFencesJson`）：
+        两个都写数组 → `Expected a string but was BEGIN_ARRAY … $.fivePointJson`
+        five=str/geo=array → 同一句，但 path = `$.geoFencesJson`
+      ⇒ 两个字段都必须是字符串。真机 App 自己写的记录里也全是 str。
+
+    ★ 上一轮推论「path $ ⇒ 值被单独 fromJson(…, Collection) ⇒ 必须是数组」
+      **是错的**：`fivePointJson` 在 JSON 里排在 `geoFencesJson` 前面，
+      它类型一错解析就中断，`geoFencesJson` 的类型根本没被验证到
+      —— 又一起「对照组不成立」（同类第 4 次）。
+
+    ★ OBS 里请用 `five_point_json()`（字符串）；本函数只用于需要 list 的
+      场合（例如提交 body 的 JSON 内层结构）。
+    """
+    if not points:
+        return []
+    return five_point_payload(points, start_ms)
+
+
+def five_point_json(points: list, start_ms: int) -> str:
+    """记录侧 `fivePointJson` 的**字符串**形态（内容为 JSON 数组文本）。
+
+    ★★ OBS 的 `fixed_point_json.fivePointJson` 就用这个 ——真机定因见
+      `five_points_list()` 的 docstring（Bean 字段是 String）。
+    """
+    return json.dumps(five_point_payload(points, start_ms),
+                      separators=(",", ":"), ensure_ascii=False)
+
+
+def geo_fences_json(geo_fences: list) -> str:
+    """记录侧 `geoFencesJson` 字符串（内容为 JSON 数组文本）。
+
+    ★★ OBS 的 `fixed_point_json.geoFencesJson` 就用这个 ——
+      Bean 字段是 String（真机定因见 swsubmit.norm_geo_fences）。
+      字段实现委托给 swsubmit.geo_fences_json，保证提交 body 与 OBS 对象
+      里的 geoFencesJson 结构完全一致（单一实现，避免两份漂移）。
     """
     import swsubmit
     return swsubmit.geo_fences_json(geo_fences)
+
+
+def geo_fences_list(geo_fences: list) -> list:
+    """记录侧 `geoFencesJson` 的**数组值**（list）。
+
+    ★ 注意：**OBS 里不要用这个函数**，要用 `geo_fences_json()`。
+      真机实证 Bean 的 `geoFencesJson` 字段是 String，写成数组会抛
+      `Expected a string but was BEGIN_ARRAY … path $.geoFencesJson`。
+      （上一轮据此推出的「必须是数组」已被推翻，见 five_points_list。）
+    """
+    import swsubmit
+    return swsubmit.norm_geo_fences(geo_fences)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -432,32 +527,36 @@ def build_obs_object(points: list, *, rrid: int, uuid: str, uid: int,
 
     fixed_points：【服务端下发的打卡点】，只用于 fixed_point_json 里的
       fivePointJson。
-        · 自由跑 → 传 [] 或 None → fivePointJson = "[]"（无点位）
+        · 自由跑 → 传 [] 或 None → fivePointJson = "[]"（空数组文本，无点位）
         · 计分跑 → 传学校下发的点位
+        · ★★ 值是**字符串**（内容才是 JSON 数组文本）—— Bean 字段声明为
+          String，写成数组会抛 `Expected a string but was BEGIN_ARRAY
+          … path $.fivePointJson`（真机实证），详见 five_points_list()。
       ★ 绝不传轨迹点：轨迹点属于 run_data.allLocJson，两者是不同的东西。
 
     geo_fences：【服务端下发的围栏】，只用于 fixed_point_json 里的
       geoFencesJson。
-        · 必须是 JSON **数组** [{"id":"2351","points":[{lat,lon}]}]。
-          填成对象 {"updateTime":…,"geoFences":[…]} 会让 App 的 Gson 抛
-          BEGIN_ARRAY but was BEGIN_OBJECT，drawGeoFence 中断，**连轨迹都不画**。
-        · ★ 但它**不足以**让详情页画出围栏：真机 A/B 试过 5 种变体
-          （数组 / 服务端原样 / freedomShowFence=true / runAreaId=2351 /
-          计分跑 + 自由跑），围栏与打卡点标记**始终未出现**。
-          即「详情页地图的围栏层另有数据源」，尚未定位 —— 详见
-          `.workbuddy-ai/memory/MEMORY.md` 的「围栏」段。
-          保留该字段是因为它确实是 App 的真实字段、格式已正确，
-          且不影响其它任何渲染。
+        · ★★ 值同样是**字符串**（内容为 JSON 数组文本 `[{…}]`），
+          App 会对该文本再 `fromJson(…, Collection)`；写成数组会在 Bean
+          解析阶段就抛 `… path $.geoFencesJson`（真机实证）。
+        · ★★ 点位键名必须是客户端 Bean 的 **`lng` / `glng`**（不是服务端 DTO 的
+          `lon` / `glon`），且 `lat/lng` 恒 0.0、真值全在 `glat/glng`（GCJ-02）
+          —— App 画多边形用的是 `glng`；写成 `glon` 会读成 0.0 ⇒ 顶点全塌到
+          `(lat, 0)` ⇒ 多边形退化、**解析成功却画不出**（真机 A/B 实证，
+          详见 swsubmit.norm_geo_fences）。
     """
     pts = [conv_point(p, start_ms) for p in points]
+    # ★★ 详情页「起」「终」图钉：首点 type=5、末点 type=6
+    #    （2026-09-28 真机 A/B 定因，见 START_PT_TYPE / END_PT_TYPE 的注释）
+    if len(pts) >= 2:
+        pts[0]["type"] = START_PT_TYPE
+        pts[-1]["type"] = END_PT_TYPE
     run_wrap = {"allLocJson": json.dumps(pts, separators=(",", ":"),
                                         ensure_ascii=False),
                 "useZip": False}
     sp, stf = build_windows(points, start_ms, total_time, rrid)
     laps = build_laps(points, start_ms)
-    five = five_point_payload(list(fixed_points or []), start_ms)
-    fx = {"fivePointJson": json.dumps(five, separators=(",", ":"),
-                                      ensure_ascii=False),
+    fx = {"fivePointJson": five_point_json(list(fixed_points or []), start_ms),
           "freedomShowFence": False,
           "geoFencesJson": geo_fences_json(geo_fences),
           "runAreaId": -1,
@@ -523,8 +622,9 @@ def upload_track(call_fn, points: list, *, rrid: int, uuid: str, uid: int,
                  verbose: bool = True):
     """完整 OBS 上传：组装 → 换签名 → 双 key PUT。返回成功数。
 
-    fixed_points：服务端下发的打卡点（自由跑传 [] / 不传 → fivePointJson="[]"）。
-    geo_fences  ：服务端下发的围栏（不传 → geoFencesJson="[]"，详情页无围栏）。
+    fixed_points：服务端下发的打卡点（自由跑传 [] / 不传 → fivePointJson=[]）。
+    geo_fences  ：服务端下发的围栏（不传 → geoFencesJson=[] 空数组，
+                  详情页无围栏可画；注意是**数组**不是字符串）。
     """
     obj = build_obs_object(points, rrid=rrid, uuid=uuid, uid=uid,
                            start_ms=start_ms, total_time=total_time,
@@ -644,14 +744,39 @@ def selftest() -> bool:
     print("  %s coorType=gcj02" % ("OK " if locs[0]["coorType"] == "gcj02" else "FAIL"))
     ok &= locs[0]["coorType"] == "gcj02"
 
+    # 5b) ★★ 「起」「终」图钉开关：首点 type=5 / 末点 type=6 / 中间 type=1
+    #     2026-09-28 真机 A/B 定因。反向注入：写成全 1 ⇒ 详情页两个标都不画。
+    tseq = [q["type"] for q in locs]
+    c_type = (len(locs) >= 2 and locs[0]["type"] == START_PT_TYPE
+              and locs[-1]["type"] == END_PT_TYPE
+              and all(q["type"] == 1 for q in locs[1:-1]))
+    print("  type 序列=%s (期望首 %d / 末 %d / 中间 1)"
+          % (tseq, START_PT_TYPE, END_PT_TYPE))
+    print("  %s 起终标记位（首 type=5 / 末 type=6）"
+          % ("OK " if c_type else "FAIL"))
+    ok &= c_type
+    # 单点轨迹不得崩（<2 点时不做标记）
+    try:
+        o1 = build_obs_object(pts[:1], rrid=1322680573, uuid="UUID-T",
+                              uid=12345678, start_ms=1789534834000, total_time=10)
+        l1 = json.loads(json.loads(_gz.decompress(
+            base64.b64decode(o1["run_data"])).decode("utf-8"))["allLocJson"])
+        print("  %s 单点轨迹不崩（type=%d）"
+              % ("OK " if len(l1) == 1 else "FAIL", l1[0]["type"]))
+        ok &= len(l1) == 1
+    except Exception as e:                                # pragma: no cover
+        print("  FAIL 单点轨迹抛异常: %s" % e)
+        ok = False
+
     # 6) ★★ 五点来源：轨迹点【不得】出现在 fixed_point_json 里
     fx = json.loads(_gz.decompress(
         base64.b64decode(obj["fixed_point_json"])).decode("utf-8"))
-    five_free = json.loads(fx["fivePointJson"])
+    five_free = json.loads(fx["fivePointJson"])          # ★ 内容是数组文本
     print("  [自由跑] fixed_point_json 点位数=%d (期望 0)" % len(five_free))
-    print("  %s 自由跑 fivePointJson == \"[]\"（无点位）"
-          % ("OK " if len(five_free) == 0 else "FAIL"))
-    ok &= len(five_free) == 0
+    c_f5a = isinstance(fx["fivePointJson"], str) and not five_free
+    print("  %s 自由跑 fivePointJson == []（字符串包空数组）"
+          % ("OK " if c_f5a else "FAIL"))
+    ok &= c_f5a
 
     cps = [{"pointName": "一号点", "lat": 22.98, "lon": 116.33,
             "glat": 22.981, "glon": 116.335, "radius": 15.0, "isFixed": 1},
@@ -662,14 +787,26 @@ def selftest() -> bool:
                             fixed_points=cps)
     fx2 = json.loads(_gz.decompress(
         base64.b64decode(obj2["fixed_point_json"])).decode("utf-8"))
-    five2 = json.loads(fx2["fivePointJson"])
-    good2 = (len(five2) == 2 and five2[0]["pointName"] == "一号点"
-             and five2[0]["isFixed"] == 1 and "lon" in five2[0]
-             and "lng" not in five2[0])
+    five2 = json.loads(fx2["fivePointJson"])             # ★ 值是 str，内容才是数组
+    good2 = (isinstance(fx2["fivePointJson"], str)
+             and len(five2) == 2 and five2[0]["pointName"] == "一号点"
+             and five2[0]["isFixed"] == 1 and "lng" in five2[0]
+             and "lon" not in five2[0])
+    #   ★ 2026-09-28 真机定因：记录侧 `fivePointJson` 的经度字段名是 **`lng`**
+    #     （不是服务端打卡点接口的 `lon`）。写成 `lon` ⇒ Bean 读 `lng` 得 0
+    #     ⇒ 每个打卡点被画到 (lat, 0)（屏幕外）⇒ 详情页一个 ✓ 都不出现。
+    #     这里**反向注入**守住它：必须 `lng` 在、`lon` 不在。
     print("  [计分跑] fixed_point_json 点位数=%d (期望 2)" % len(five2))
-    print("  %s 计分跑五点 = 真实打卡点（pointName/isFixed/lon 正确）"
+    print("  %s 计分跑五点 = 真实打卡点（字符串 + pointName/isFixed/lng 正确）"
           % ("OK " if good2 else "FAIL"))
     ok &= good2
+
+    # ★ 变异自检：five_points_list → list，five_point_json → str，必须可区分
+    c_f5b = (isinstance(five_points_list(cps, 1789534834000), list)
+             and isinstance(five_point_json(cps, 1789534834000), str))
+    print("  %s 变异自检：five_points_list→list / five_point_json→str"
+          % ("OK " if c_f5b else "FAIL"))
+    ok &= c_f5b
 
     # 7) id 规则（speed_json 是双层包裹，要解两层）
     print("  speed_json[0].id 规则: (rrid%%100000)*1000+hi")
@@ -680,7 +817,11 @@ def selftest() -> bool:
                                     spj[0]["id"], exp_id))
     ok &= spj[0]["id"] == exp_id
 
-    # 8) ★★ 围栏：geoFencesJson 必须是 JSON **数组**（2026-09-27 真机定因）
+    # 8) ★★ 围栏：geoFencesJson 必须是**字符串**（内容才是 JSON 数组文本）
+    #    2026-09-27 真机定因：fixed_point_json 被 Gson.fromJson(text, Bean)
+    #    反序列化，Bean 的 geoFencesJson 字段声明为 String。
+    #      写成数组 → `Expected a string but was BEGIN_ARRAY … path $.geoFencesJson`
+    #      （同理 fivePointJson 也一样；曾据 path `$` 误推成"必须是数组"，已推翻）
     gf_raw = [{"id": 2351, "name": "围栏",
                "points": [{"lon": 0.0, "lat": 0.0, "glon": 116.330092,
                            "glat": 22.982321, "pointsNumber": 1}]}]
@@ -689,32 +830,63 @@ def selftest() -> bool:
                             fixed_points=cps, geo_fences=gf_raw)
     fx3 = json.loads(_gz.decompress(
         base64.b64decode(obj3["fixed_point_json"])).decode("utf-8"))
-    gj3 = json.loads(fx3["geoFencesJson"])
-    c_f1 = isinstance(gj3, list)                       # ← 关键：数组不是对象
+    gj3 = json.loads(fx3["geoFencesJson"])             # 值是 str，内容才是数组
+    c_f1 = isinstance(fx3["geoFencesJson"], str)
+    p0 = gj3[0]["points"][0]
+    #   ★★ 2026-09-28 真机定因（A/B 实证）：围栏顶点键名必须是客户端 Bean 的
+    #      **`lng` / `glng`**（不是服务端 `getGeoFenceForRun` DTO 的 `lon`/`glon`），
+    #      且 `lat/lng` 恒 0.0、真值全在 `glat/glng`(GCJ-02)。
+    #      写 `glon` ⇒ App 读 `glng` 得 0 ⇒ 十顶点全塌到 (lat, 0) ⇒ 多边形退化
+    #      ⇒ **Gson 解析成功、不抛异常、却什么也画不出来**。
+    #      这里用「服务端 DTO 形态」的输入（lon/glon）反向注入，断言输出必须
+    #      被规整成 `glng`（且不得残留 `glon`）。
     c_f2 = (len(gj3) == 1 and gj3[0]["id"] == "2351"
-            and gj3[0]["points"][0]["lat"] == 22.982321     # glat 兜底
-            and gj3[0]["points"][0]["lon"] == 116.330092)   # glon 兜底
-    print("  [围栏] geoFencesJson 顶层类型 = %s (期望 list)"
-          % type(gj3).__name__)
-    print("  %s 围栏是 JSON 数组（App Gson 要求 BEGIN_ARRAY）"
+            and p0["glat"] == 22.982321 and p0["glng"] == 116.330092  # GCJ 真值
+            and p0["lat"] == 0.0 and p0["lng"] == 0.0                  # 客户端读这两键
+            and "glon" not in p0 and "lon" not in p0
+            and p0["pointsNumber"] == 1)
+    print("  [围栏] geoFencesJson 值类型 = %s (期望 str)"
+          % type(fx3["geoFencesJson"]).__name__)
+    print("  %s 围栏是字符串（Bean 字段是 String）"
           % ("OK " if c_f1 else "FAIL"))
-    print("  %s 顶点用 glat/glon 兜底、id 转字符串" % ("OK " if c_f2 else "FAIL"))
+    print("  %s 顶点键名 = 客户端 Bean 的 glat/glng（lat/lng 恒 0）、id 转字符串"
+          % ("OK " if c_f2 else "FAIL"))
     ok &= (c_f1 and c_f2)
 
-    # 不传围栏 → 回到 "[]"（旧行为），且仍然是数组
+    # 客户端形态输入（glng）也必须能规整（两种拼写都要吃）
+    gf_cli = [{"id": 2351, "points": [{"lat": 0.0, "lng": 0.0,
+                                       "glat": 22.982321,
+                                       "glng": 116.330092}]}]
+    p1 = geo_fences_list(gf_cli)[0]["points"][0]
+    c_f2b = (p1["glat"] == 22.982321 and p1["glng"] == 116.330092
+             and p1["lat"] == 0.0 and p1["lng"] == 0.0)
+    print("  %s 客户端形态输入（glng）同样被规整"
+          % ("OK " if c_f2b else "FAIL"))
+    ok &= c_f2b
+
+    # 不传围栏 → "[]"（空数组文本，仍是字符串）
     obj4 = build_obs_object(pts, rrid=1322680573, uuid="UUID-T", uid=12345678,
                             start_ms=1789534834000, total_time=10)
     fx4 = json.loads(_gz.decompress(
         base64.b64decode(obj4["fixed_point_json"])).decode("utf-8"))
-    c_f3 = json.loads(fx4["geoFencesJson"]) == []
-    print("  %s 不传围栏 → geoFencesJson=\"[]\"" % ("OK " if c_f3 else "FAIL"))
+    c_f3 = (fx4["geoFencesJson"] == "[]"
+            and isinstance(fx4["geoFencesJson"], str))
+    print("  %s 不传围栏 → geoFencesJson=\"[]\"（字符串）"
+          % ("OK " if c_f3 else "FAIL"))
     ok &= c_f3
 
-    # ★ 变异自检：把「空围栏」伪造成对象形状，必须不再通过数组断言
-    c_f4 = isinstance(json.loads(json.dumps({"updateTime": 1, "geoFences": []})),
-                      list) is False
-    print("  %s 变异自检：对象形状不被当成数组" % ("OK " if c_f4 else "FAIL"))
+    # ★ 变异自检 1：两个函数必须**可区分**（否则断言是空转）
+    c_f4 = (isinstance(geo_fences_json(gf_raw), str)
+            and isinstance(geo_fences_list(gf_raw), list))
+    print("  %s 变异自检：geo_fences_json→str / geo_fences_list→list"
+          % ("OK " if c_f4 else "FAIL"))
     ok &= c_f4
+
+    # ★ 变异自检 2：把「空围栏」伪造成对象形状，必须不被当成数组
+    c_f5 = isinstance(json.loads(json.dumps({"updateTime": 1, "geoFences": []})),
+                      list) is False
+    print("  %s 变异自检：对象形状不被当成数组" % ("OK " if c_f5 else "FAIL"))
+    ok &= c_f5
 
     # 9) ★★ 列表型四键必须是「双层包裹」（App 会再 gunzip 一次）
     #    真机症状：单层 → ZipException: Not in GZIP format → 详情页「每公里数据」不渲染
