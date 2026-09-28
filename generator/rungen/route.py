@@ -206,9 +206,23 @@ def _build_base_loop(start: Tuple[float, float],
             ctrl.append(dest_point(start[0], start[1], ang, rr))
         return ctrl + [ctrl[0]]
 
-    # 1. 最短访问顺序 (含起点), 开路顶点序列 [start, wp...]
-    _tour_len, seq = _tsp_min_legs(start, list(waypoints), None)
+    # 1. 最短访问顺序 (含起点), 闭合环顶点序列 [start, wp...]
+    #
+    # ★★ 2026-09-28 修「闭环回程边没被计入代价」：
+    #   LOOP 的最后一段是「末个打卡点 → 起点」，可旧代码传 end=None，
+    #   求的是**开路**最短路径 —— 回程边完全不参与优化。
+    #   实测（揭阳校区 6 选 5 的「缺田径场4」那组）：开路最优顺序
+    #   起→3→6→1→5→2 里，5→2 这段横穿内圈，弦离环心只有 **13.8m**
+    #   （环半径 ~62m，比值 0.39×），画出来中间塌一块，不像椭圆。
+    #   改成 end=start（真正的闭环最短）后该组变成 起→3→6→1→2→5→起，
+    #   最近弦 33.3m（0.93×），与其余 5 组（0.68~0.95×）齐平；
+    #   且其余 5 组的访问顺序**完全不变** —— 零回归。
+    _tour_len, seq = _tsp_min_legs(start, list(waypoints), start)
     ring = list(seq)
+    # end=起点 时 seq 末尾是重复的起点：去掉，否则闭合样条会多出一个零长段
+    if len(ring) >= 2 and haversine(ring[0][0], ring[0][1],
+                                    ring[-1][0], ring[-1][1]) < 1e-6:
+        ring.pop()
     if len(ring) < 3:
         return [start] + list(waypoints) + [start]
 
