@@ -552,6 +552,28 @@ def build_obs_object(points: list, *, rrid: int, uuid: str, uid: int,
           详见 swsubmit.norm_geo_fences）。
     """
     pts = [conv_point(p, start_ms) for p in points]
+
+    # ★★ 步频/步幅图的【数据源保护】（2026-09-28 真机定因）
+    #    生成器的 `points` 只有 `cadence`(步/分) / `stride_cm`，**没有 `steps`**
+    #    （累计步数）。累计步数由 `swsubmit.prep_points()` 用 cadence 梯形积分补出。
+    #    若调用方跳过这一步直接把生成器 points 喂进来：
+    #      · `android_tensec`（`_track_stream` 取 `b["steps"]-a["steps"]`）
+    #        ⇒ `step_freq_json[].stepsNum` **全 0**
+    #      · `build_laps`（`p.get("steps",0)`）⇒ `avgCadence`=0、
+    #        `avgStride` 退化成 `lap_d*100`
+    #    ⇒ App 画不出【步频图 / 步幅图】，详情页只剩配速图 + 海拔图。
+    #    实测：走 `_repair_record.py` 重建的 9/28 记录只有 2 张图；
+    #          正常提交（swcli→build_record_body→prep_points）的 9/16 记录有 4 张图。
+    #    这里只【告警】不改数据 —— 避免把调用方的缺陷悄悄盖掉。
+    _has_cad = any(float(p.get("cadence", 0) or 0) > 0 for p in points)
+    _has_steps = any(float(p.get("steps", 0) or 0) > 0 for p in points)
+    if _has_cad and not _has_steps:
+        import sys as _sys
+        _sys.stderr.write(
+            "[warn] build_obs_object: points 只有 cadence 没有累计步数 steps "
+            "⇒ step_freq_json.stepsNum 全 0、laps.avgStride 失效 "
+            "⇒ 详情页会缺【步频图/步幅图】。请先走 swsubmit.prep_points() 补齐。\n")
+
     # ★★ 详情页「起」「终」图钉：首点 type=5、末点 type=6
     #    （2026-09-28 真机 A/B 定因，见 START_PT_TYPE / END_PT_TYPE 的注释）
     if len(pts) >= 2:
