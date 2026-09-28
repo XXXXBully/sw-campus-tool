@@ -354,6 +354,37 @@ def gen_free_track(campus_lat: float, campus_lon: float, dist_km: float,
     return _run_gen(cmd, outdir, verbose)
 
 
+ANCHOR_MIN_CLEAR_M = 25.0   # 起点距最近打卡点的最小间距
+
+
+def _pick_anchor(use: list, verbose: bool = True) -> dict:
+    """选一个「不压在打卡点上」的起点。
+
+    ★ 为什么不能直接用 `use[0]`：详情页的「起」图钉会**完全遮住**它下面的打卡点标记。
+      旧实现拿 `use[0]` 当起点 ⇒ 起点与第一个打卡点重合 ⇒ 那个 ✓ 在真机上根本看不见
+      （数据层 5 个点全部命中，肉眼只数得到 4 个）。
+
+    改成取**所有打卡点的质心**后，起点落在几个点的中间，5 个 ✓ 全都能看见；
+    而轨迹仍会依次经过全部打卡点 —— 生成器是 LOOP 模式（start → 各 cp → start），
+    起点本身不需要是打卡点。
+
+    质心离最近打卡点不足 `ANCHOR_MIN_CLEAR_M` 时回退到 `use[0]`（并告警）。
+    """
+    n = len(use)
+    lat0 = sum(p["lat"] for p in use) / n
+    lon0 = sum(p["lon"] for p in use) / n
+    d = min(haversine(lat0, lon0, p["lat"], p["lon"]) for p in use)
+    if d < ANCHOR_MIN_CLEAR_M:
+        if verbose:
+            print("  [起点] ⚠ 质心距最近打卡点仅 %.1fm（< %.0fm），回退到首个打卡点"
+                  % (d, ANCHOR_MIN_CLEAR_M))
+        return use[0]
+    if verbose:
+        print("  [起点] 取打卡点质心，距最近打卡点 %.1fm（避开「起」图钉遮挡）" % d)
+    return {"pointName": "起点", "lat": lat0, "lon": lon0,
+            "radius": use[0].get("radius", 15.0)}
+
+
 def gen_score_track(points: list, dist_km: float, *,
                     start: str = None, pace: str = "5:40",
                     cadence: int = 0, seed: int = 0, outdir: str = None,
@@ -371,7 +402,7 @@ def gen_score_track(points: list, dist_km: float, *,
         raise ValueError("计分跑需要打卡点，但点位列表为空")
     use = to_wgs_points(raw)
     outdir = outdir or os.path.join(HERE, "generator", "output")
-    anchor = use[0]
+    anchor = _pick_anchor(use, verbose=verbose)
     cmd = _gen_cmd() + [
         "--dist", "%.2f" % dist_km,
         "--start", start or _fmt_start(),
