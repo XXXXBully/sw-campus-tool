@@ -169,28 +169,47 @@ def gz_str(s: str) -> str:
     return gz(s.encode("utf-8"))
 
 
-# ── 「二次包裹」载荷（列表型字段专用）────────────────────────────
-# ★ 真机实测定因（2026-09-27，logcat）：
-#     RunHistoryDetailActivity.parseLapRows
-#       → mvi.run.oo0o0Oo.OooO0oO
-#       → utils.o0OO00O.OooO0oO 抛 java.util.zip.ZipException: Not in GZIP format
-#   ⇒ App 对「列表型」载荷（laps / speed / step_freq / segment）**还要再解一层 gzip**。
-#   信封解一层后 App 拿到的是明文 → 再 gunzip 就炸。所以这些键里装的**本身就得是
-#   gzip+b64**（即解两层才见明文）。
-#   后果对照（同一条记录，只改这一处）：
-#     单层 → ZipException 中断 setMapCenter，「每公里数据」整块不渲染
-#     双层 → 异常计数 0；每公里数据 / 配速图 / 海拔图 / 步频步幅 全部正常
-#   （配速图均值 5'40" == 680s÷2km，证明 App 解出的确实是我们的原始数据）
+# ── ⚠️ 历史遗留：「二次包裹」——**已作废，别再使用** ──────────────
+# ★★★ 2026-09-28 晚真机定因，**推翻 09-27 的旧结论** ★★★
+#
+#   旧结论（错）：App 对列表型载荷还要再解一层 gzip ⇒ 这些键得装「双层」。
+#   旧证据：单层时 logcat 报 `java.util.zip.ZipException: Not in GZIP format`
+#           （`RunHistoryDetailActivity.parseLapRows`）。**但那条证据的前提是错的**：
+#           当时写进去的其实是 `b64(JSON)`——**根本没 gzip**，
+#           所以 App gunzip 才炸；并不是「少了一层」。
+#
+#   新证据（可复现，扫描账号下全部 19 条记录的四键层数）：
+#     | 记录                       | speed/step_freq/laps_json | 详情页图表        |
+#     |----------------------------|---------------------------|-------------------|
+#     | App 自写（09-13~09-18 全部）| gzip×1 → 直接是 JSON      | **配速/步频/步幅/海拔 四张全有** |
+#     | 我们 09-27 16:54            | gzip×1 → JSON             | —                 |
+#     | 我们 09-28 14:41 / 13:51    | gzip×1 → 还是 base64 文本 | **只剩 配速/海拔 两张** |
+#   ⇒ **正确形态 = 单层 `b64(gzip(JSON))`**，与 App 自写记录逐字节同构。
+#
+#   机理：App 只 gunzip 一次。
+#     · 单层 → 解出 JSON ⇒ 步频图（`step_freq_json.stepsNum`）、
+#              步幅图（`laps_json.avgStride`）都能画。
+#     · 双层 → 解出 base64 文本 ⇒ JSON 解析失败 ⇒ **静默不画**（不抛异常、无 log）。
+#     而「配速图 / 海拔图」来自 `run_data.allLocJson`，与这四键无关 ⇒
+#     双层时它们照常渲染 —— 这正是「四张图只剩两张」的成因，也是旧结论
+#     「双层后全部正常」的错觉来源（当时只看配速/海拔，没数步频/步幅）。
+#
+#   ★ 教训：**「缺图」要按图逐一数，不能只确认「有图」**；另外，
+#     「异常消失」不等于「解析成功」——多包一层会让异常变成**静默失败**。
+#
+# 下面两个函数保留仅为兼容历史脚本，**不要在新代码里调用**。
 def gz2(data: bytes) -> str:
-    """把「已是 gzip+b64 的字符串」再包一层 → 解两层才见明文。"""
+    """⚠️ 已作废：双层包裹。App 只解一层，用它会静默丢图。"""
     return gz(data)
 
 
 def gz2_json(v) -> str:
+    """⚠️ 已作废（见上方长注释）。新代码请用 `gz_json`。"""
     return gz(gz_json(v).encode("ascii"))
 
 
 def gz2_str(s: str) -> str:
+    """⚠️ 已作废（见上方长注释）。新代码请用 `gz_str`。"""
     return gz(gz_str(s).encode("ascii"))
 
 
@@ -522,11 +541,16 @@ def build_obs_object(points: list, *, rrid: int, uuid: str, uid: int,
                      geo_fences: list = None) -> dict:
     """组装 10 键 OBS 对象（值均 gzip+base64）
 
-    ★ 两层包裹：`run_data` / `fixed_point_json` / `rrid` / `uuid` / `uid` /
-      `runFaceCheck` 是**单层**（信封解一层即明文）；而**列表型**四键
-      （`laps_json` / `speed_json` / `step_freq_json` / `segment_json`）
-      是**双层**（App 还要再 gunzip 一次）—— 定因见 gz2_json 的注释。
-      写错层数的后果不是「数据难看」，而是 `ZipException` 直接中断详情页渲染。
+    ★★ **10 个键全部是「单层」** `b64(gzip(明文))` —— App 只 gunzip 一次。
+      2026-09-28 真机定因（**推翻 09-27 的「列表型四键要双层」结论**）：
+        · App 自写记录的 `speed_json`/`step_freq_json`/`laps_json`/`segment_json`
+          全是 gzip×1 → 解一层直接是 JSON。
+        · 我们写成双层时：App 解一层得到 **base64 文本** ⇒ JSON 解析失败
+          ⇒ **静默不画**（不抛异常、无 log）。因为「配速图 / 海拔图」来自
+          `run_data.allLocJson`（与这四键无关），双层时它们照常渲染 ⇒
+          表现成「四张图只剩两张」。
+        · 旧证据 `ZipException: Not in GZIP format` 的真实前提是当时写的是
+          `b64(JSON)`（**压根没 gzip**），不是「少了一层」。详见 gz2_json 注释。
 
     with_steps 参数保留以兼容旧调用，但自由跑与计分跑【都要】完整
     步频/步幅数据（详情页图表数据源），不再清零。
@@ -595,10 +619,12 @@ def build_obs_object(points: list, *, rrid: int, uuid: str, uid: int,
         "uid": gz_str(str(uid)),
         "run_data": gz_json(run_wrap),
         "fixed_point_json": gz_json(fx),
-        "segment_json": gz2_str(""),
-        "speed_json": gz2_json(sp),
-        "step_freq_json": gz2_json(stf),
-        "laps_json": gz2_json(laps),
+        # ★★★ 列表型四键 = **单层** `b64(gzip(JSON))`（2026-09-28 真机定因，
+        #     推翻了此前「要解两层」的结论，详见 gz2_json 上方的长注释）
+        "segment_json": gz_str(""),
+        "speed_json": gz_json(sp),
+        "step_freq_json": gz_json(stf),
+        "laps_json": gz_json(laps),
         "runFaceCheck": gz_str(""),
     }
 
@@ -836,10 +862,10 @@ def selftest() -> bool:
           % ("OK " if c_f5b else "FAIL"))
     ok &= c_f5b
 
-    # 7) id 规则（speed_json 是双层包裹，要解两层）
+    # 7) id 规则（speed_json 是**单层**包裹，解一层即明文）
     print("  speed_json[0].id 规则: (rrid%%100000)*1000+hi")
-    spj = json.loads(_gz.decompress(base64.b64decode(
-        _gz.decompress(base64.b64decode(obj["speed_json"])).decode("utf-8"))).decode("utf-8"))
+    spj = json.loads(_gz.decompress(
+        base64.b64decode(obj["speed_json"])).decode("utf-8"))
     exp_id = (1322680573 % 100000) * 1000 + 10
     print("  %s id=%d (期望 %d)" % ("OK " if spj[0]["id"] == exp_id else "FAIL",
                                     spj[0]["id"], exp_id))
@@ -916,52 +942,51 @@ def selftest() -> bool:
     print("  %s 变异自检：对象形状不被当成数组" % ("OK " if c_f5 else "FAIL"))
     ok &= c_f5
 
-    # 9) ★★ 列表型四键必须是「双层包裹」（App 会再 gunzip 一次）
-    #    真机症状：单层 → ZipException: Not in GZIP format → 详情页「每公里数据」不渲染
+    # 9) ★★★ 列表型四键必须是「单层」`b64(gzip(JSON))`（App 只 gunzip 一次）
+    #    2026-09-28 真机定因（**推翻「要双层」的旧结论**）：
+    #      App 自写记录四键全是 gzip×1；我们写成双层时，App 解一层得到 base64
+    #      文本 ⇒ JSON 解析失败 ⇒ **静默不画**（步频图/步幅图消失）。
     list_keys = ("laps_json", "speed_json", "step_freq_json", "segment_json")
-    layer_ok = {}
-    for k in list_keys:
+
+    def _is_double(v):
+        """解一层后剩下的字节还是 gzip 流（b64 后以 \\x1f\\x8b 开头）= 双层包裹。"""
         try:
-            _unwrap1(_unwrap1(obj[k]))          # 解两层必须成功
-            layer_ok[k] = True
+            inner = _unwrap1(v)
         except Exception:
-            layer_ok[k] = False
-    print("  %s 列表型四键可解两层 %s"
+            return False
+        try:
+            return base64.b64decode(inner)[:2] == b"\x1f\x8b"
+        except Exception:
+            return False
+
+    layer_ok = {k: not _is_double(obj[k]) for k in list_keys}
+    print("  %s 列表型四键=单层包裹 %s"
           % ("OK " if all(layer_ok.values()) else "FAIL",
-             {k: ("2层" if v else "不足2层") for k, v in layer_ok.items()}))
+             {k: ("单层" if v else "双层!") for k, v in layer_ok.items()}))
     ok &= all(layer_ok.values())
 
-    # 解两层后必须是合法 JSON / 空串
-    laps2 = json.loads(_unwrap1(_unwrap1(obj["laps_json"])))
-    c_l1 = isinstance(laps2, list) and len(laps2) >= 1
-    print("  %s laps_json 解两层 == JSON 数组(%d 圈)"
-          % ("OK " if c_l1 else "FAIL", len(laps2) if isinstance(laps2, list) else -1))
+    # 解一层后必须是合法 JSON / 空串
+    laps1 = json.loads(_unwrap1(obj["laps_json"]))
+    c_l1 = isinstance(laps1, list) and len(laps1) >= 1
+    print("  %s laps_json 解一层 == JSON 数组(%d 圈)"
+          % ("OK " if c_l1 else "FAIL", len(laps1) if isinstance(laps1, list) else -1))
     ok &= c_l1
-    c_l2 = _unwrap1(_unwrap1(obj["segment_json"])) == ""
-    print("  %s segment_json 解两层 == 空串" % ("OK " if c_l2 else "FAIL"))
+    c_l2 = _unwrap1(obj["segment_json"]) == ""
+    print("  %s segment_json 解一层 == 空串" % ("OK " if c_l2 else "FAIL"))
     ok &= c_l2
 
-    # 单层键必须【只】解一层（多解一层要失败）—— 防止把全部键都改成双层
-    single_ok = True
-    for k in ("rrid", "run_data", "fixed_point_json"):
-        try:
-            _unwrap1(_unwrap1(obj[k]))           # 再解一层应当炸
-            single_ok = False
-        except Exception:
-            pass
-    print("  %s 单层键（rrid/run_data/fixed_point_json）只解一层"
+    # 单层键同样【只】解一层
+    single_ok = all(not _is_double(obj[k])
+                    for k in ("rrid", "run_data", "fixed_point_json"))
+    print("  %s 单层键（rrid/run_data/fixed_point_json）也是单层"
           % ("OK " if single_ok else "FAIL"))
     ok &= single_ok
 
-    # ★ 变异自检：故意把 laps_json 退回单层，断言必须能抓到
+    # ★ 变异自检：故意把 laps_json 多包一层（双层），断言必须能抓到
     bad = dict(obj)
-    bad["laps_json"] = gz_json(laps2)          # 退回单层（即修复前的线上行为）
-    try:
-        _unwrap1(_unwrap1(bad["laps_json"]))
-        caught = False
-    except Exception:
-        caught = True
-    print("  %s 变异自检：单层 laps_json 会被抓出" % ("OK " if caught else "FAIL"))
+    bad["laps_json"] = gz2_json(laps1)         # 双层（= 修复前的线上行为）
+    caught = _is_double(bad["laps_json"])
+    print("  %s 变异自检：双层 laps_json 会被抓出" % ("OK " if caught else "FAIL"))
     ok &= caught
 
     print("=" * 62)
