@@ -231,11 +231,17 @@ def conv_point(p: dict, start_ms: int, pt_type: int = 1) -> dict:
     dist = float(p.get("dist", 0) or 0)
     steps = int(p.get("steps", 0) or 0)
     cadence = float(p.get("_cadence", p.get("cadence", 0)) or 0)
-    speed = float(p.get("speed", 0) or 0)
+    speed_ms = float(p.get("speed", 0) or 0)
     ele = float(p.get("ele", 0) or 0)
+    # ★★ `speed` / `avgSpeed` 的单位是【十进制分钟/公里】，不是 m/s
+    #    真机实测（2026-09-28）：写 m/s（2.95）时详情页配速曲线被画到 Y 轴
+    #    3'00" 附近（App 直接把数值当分钟）、「最快配速」显示 1'55"
+    #    （= min(speed)）；改成 min/km 后曲线回到 6'00" 一带、
+    #    「最快配速」= 4'12"，与「每公里数据」完全自洽。
+    pace_min = (1000.0 / (speed_ms * 60.0)) if speed_ms > 0 else 0.0
 
     return {
-        "avgSpeed": round_to(speed, 4),
+        "avgSpeed": round_to(pace_min, 4),
         "bdA": round_to(ele, 2),
         "bdD": 0.0,
         "bdG": 0,
@@ -254,7 +260,7 @@ def conv_point(p: dict, start_ms: int, pt_type: int = 1) -> dict:
         "locationId": "",
         "queueNum": 0,
         "radius": 0.0,
-        "speed": round_to(speed, 4),
+        "speed": round_to(pace_min, 4),
         "state": 0,
         "stepDistance": 0.0,
         "totalDis": round_to(dist, 4),
