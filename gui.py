@@ -957,9 +957,11 @@ PAGE = r"""<!DOCTYPE html>
        color:var(--txt);white-space:nowrap;cursor:pointer;min-width:0}
   .lb-remember input{flex:none!important;width:14px;height:14px;margin:0!important;
        accent-color:var(--ac);cursor:pointer}
-  /* 历史账号下拉：只占内容宽度，不抢手机号输入框的空间 */
-  .lb-acct{flex:0 0 auto!important;width:auto!important;min-width:132px;max-width:200px;
-       margin:0;font-size:13px;cursor:pointer}
+  /* 历史账号下拉：复用 .devdd 组件（与模式/轨迹形状/配速同款外观），
+     ★ 不能用原生 <select> —— 原生控件外观由浏览器决定，和页面里其它下拉框长得不一样 */
+  .lb-acct{flex:0 0 auto!important;width:auto!important;min-width:158px;max-width:232px;
+       margin:0;font-size:13px}
+  .lb-acct .devdd-head{height:38px;padding:0 9px;font-size:13px}
   @media(max-width:720px){.row{flex-wrap:wrap}.lb-row{flex-wrap:wrap}.lb-state{flex:100%;text-align:left}}
   /* ── 手机窄屏适配（Termux 手机浏览器访问 127.0.0.1:8765）──────────────── */
   @media(max-width:560px){
@@ -1014,8 +1016,16 @@ PAGE = r"""<!DOCTYPE html>
   <!-- ① 登录条 -->
   <div class="card loginbar">
     <div class="lb-row">
-      <select id="acctSel" class="lb-acct" onchange="pickAccount(this.value)"
-              style="display:none" title="选择之前登录过的账号（姓名 · 手机号）"></select>
+      <div class="devdd lb-acct" id="acctDDBox" style="position:relative;display:none">
+        <div class="devdd-head" id="acctDDHead" role="button" tabindex="0"
+             onclick="toggleAcctDD(event)" title="选择之前登录过的账号（姓名 · 手机号）">
+          <span id="acctDDTxt">选择历史账号…</span><span class="caret" aria-hidden="true">▾</span>
+        </div>
+        <div class="devdd-list" id="acctDDList">
+          <div class="devdd-opts" id="acctOpts"></div>
+        </div>
+        <input type="hidden" id="acctSel">
+      </div>
       <input id="username" placeholder="手机号">
       <input id="password" type="password" placeholder="密码">
       <label class="lb-remember" for="remember"><input type="checkbox" id="remember" checked> 记住密码</label>
@@ -1514,30 +1524,49 @@ function rememberAccount(u,p,name){
   renderAccounts();
 }
 
-/* 渲染历史账号下拉：选项文字 =「姓名 · 手机号」（姓名在前） */
+/* 渲染历史账号下拉：选项文字 =「姓名 · 手机号」（姓名在前）
+   ★ 用自定义 .devdd 组件（与模式/轨迹形状/配速同款），不用原生 <select> ——
+     原生控件外观由浏览器决定，跟页面里其它下拉框长得完全不一样。 */
 function renderAccounts(){
-  const sel=$("acctSel");
-  if(!sel)return;
+  const box=$("acctDDBox");
+  if(!box)return;
   const list=loadAccounts().filter(x=>x&&x.u);
-  if(!list.length||(state&&state.logged)){sel.style.display="none";return;}
-  sel.innerHTML="";
-  const ph=document.createElement("option");
-  ph.value="";ph.textContent="选择历史账号…";
-  sel.appendChild(ph);
+  if(!list.length||(state&&state.logged)){box.style.display="none";return;}
+  box.style.display="";
+  const cur=$("acctSel").value;
+  const o=$("acctOpts");o.innerHTML="";
   list.forEach(x=>{
-    const o=document.createElement("option");
-    o.value=x.u;o.textContent=acctLabel(x);
-    sel.appendChild(o);
+    const d=document.createElement("div");
+    d.className="dd-opt"+(x.u===cur?" sel":"");
+    d.textContent=acctLabel(x);
+    d.onclick=()=>pickAccount(x.u);
+    o.appendChild(d);
   });
-  sel.value="";
-  sel.style.display="";
 }
+
+function toggleAcctDD(e){
+  e=e||window.event;
+  if(e&&e.stopPropagation)e.stopPropagation();
+  const box=$("acctDDBox");
+  const willOpen=!box.classList.contains("open");
+  box.classList.toggle("open",willOpen);
+  if(willOpen)renderAccounts();
+}
+function closeAcctDD(){const b=$("acctDDBox");if(b)b.classList.remove("open");}
+/* 点击页面其他区域收起历史账号下拉 */
+document.addEventListener("click",e=>{
+  const box=$("acctDDBox");
+  if(box&&!box.contains(e.target))closeAcctDD();
+});
 
 /* 选中历史账号：填入手机号 +（若存过）密码 */
 function pickAccount(u){
   if(!u)return;
   const x=loadAccounts().find(y=>y&&y.u===u);
   if(!x)return;
+  $("acctSel").value=x.u;
+  $("acctDDTxt").textContent=acctLabel(x);
+  closeAcctDD();
   $("username").value=x.u;
   $("password").value=x.p||"";
   $("remember").checked=!!x.p;
@@ -1875,7 +1904,11 @@ document.addEventListener("input",e=>{
     const list=loadAccounts();
     if(list.length){
       const x=list[0];
-      if(x.u)$("username").value=x.u;
+      if(x.u){
+        $("username").value=x.u;
+        $("acctSel").value=x.u;
+        $("acctDDTxt").textContent=acctLabel(x);
+      }
       if(x.p){$("password").value=x.p;$("remember").checked=true;restoredPwd=true;}
     }
   }catch(e){}
