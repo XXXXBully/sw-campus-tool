@@ -406,6 +406,11 @@ def one_run(args, *, start: str = None, dist: float = None,
            "--campus-lat", "%.6f" % args.campus_lat,
            "--campus-lon", "%.6f" % args.campus_lon,
            "--pace", args.pace]
+    # ★ 轨迹形状（2026-09-29 新增）：ellipse=椭圆（默认最稳）/ track=标准跑道
+    if getattr(args, "shape", "ellipse") and args.shape != "ellipse":
+        cli += ["--shape", args.shape]
+    if getattr(args, "track_straight", 0.0):
+        cli += ["--track-straight", "%g" % args.track_straight]
     if start:
         cli += ["--start", start]
     if args.weight:
@@ -443,6 +448,11 @@ def main():
     ap.add_argument("--campus-lon", type=float, default=None,
                     help="校区经度（不传则登录后按学生所属学校自动获取）")
     ap.add_argument("--pace", default="5:40", help="目标配速（默认 5:40）")
+    ap.add_argument("--shape", choices=["ellipse", "track"], default="ellipse",
+                    help="轨迹形状：ellipse=椭圆（默认，最稳）；"
+                         "track=标准跑道（两个半圆 + 两条直道）")
+    ap.add_argument("--track-straight", type=float, default=0.0,
+                    help="跑道形状的直道长度（米）；0=按打卡点自适应")
     ap.add_argument("--weight", type=float, default=65.0)
 
     g = ap.add_argument_group("时间安排")

@@ -30,6 +30,8 @@ import swclient as sw
 HERE = os.path.dirname(os.path.abspath(__file__))
 IDENTITY_FILE = os.path.join(HERE, "identity.json")
 DEVICES_FILE = os.path.join(HERE, "devices.json")
+# ★ 发布包自带的**只读设备池**（已脱敏）：见 `load_devices()` 的合并逻辑
+DEVICES_POOL_FILE = os.path.join(HERE, "devices_pool.json")
 SESSION_FILE = os.path.join(HERE, "session.json")
 ACTIVE_FILE = os.path.join(HERE, "active_device.txt")
 BIND_FILE = os.path.join(HERE, "device_bind.json")
@@ -62,14 +64,53 @@ def get_bind_alias(username: str) -> str:
 # ══════════════════════════════════════════════════════════════════
 # 设备档案库（多设备选择）
 # ══════════════════════════════════════════════════════════════════
+# ★ 池子里禁止分发的键（本地语义，不是机型模板）
+POOL_SKIP_KEYS = {"默认"}
+
+
 def load_devices() -> dict:
-    """{ 设备别名: {device_id, app_install_time, os_version, device_name, city, ...} }"""
+    """{ 设备别名: {device_id, app_install_time, os_version, device_name, city, ...} }
+
+    ★★ 2026-09-29 修「设备库只有一个」（用户反馈）：
+      发布包（尤其**手机包**）此前不带设备库 ⇒ 本函数返回空 ⇒
+      `seed_devices_from_identity()` 只播种 **1 台「默认」**，用户看到
+      「之前很多设备都不见了」（实测 win 包 99 台 / mobile 包仅 1 台）。
+      现在发布包带一份**只读设备池** `devices_pool.json`（已脱敏）：
+        · 本地库为空  → 直接用池子初始化（首次运行就有全部设备）
+        · 本地库非空  → 把池子里**缺的**设备并进来（老包升级也能补齐）
+      ★ 同名设备**不覆盖** —— 用户自己改过的优先。
+      ★ 为什么用 `devices_pool.json` 而不是直接放 `devices.json`：
+        `devices.json` 是**运行时可变**的本地库（.gitignore 已排除），
+        若包内同名，用户覆盖安装时会丢掉自己新增/修改的设备。
+    """
+    d = {}
     if os.path.exists(DEVICES_FILE):
         try:
-            return json.load(open(DEVICES_FILE, encoding="utf-8"))
+            d = json.load(open(DEVICES_FILE, encoding="utf-8"))
         except Exception:
-            pass
-    return {}
+            d = {}
+    if os.path.exists(DEVICES_POOL_FILE):
+        try:
+            pool = json.load(open(DEVICES_POOL_FILE, encoding="utf-8"))
+        except Exception:
+            pool = {}
+        added = 0
+        for k, v in pool.items():
+            # ★★ 2026-09-29 修「默认设备被池子顶掉」：`默认` 是**本地语义**
+            #   （= 本机指纹），不是机型模板，绝不允许从池子分发。
+            #   历史池子里误带了一台别人的 `默认`（22081212C / 大连市），
+            #   导致手机端 `devs` 永不为空、真机 `默认` 永远播不进来。
+            if k in POOL_SKIP_KEYS:
+                continue
+            if k not in d:
+                d[k] = v
+                added += 1
+        if added:                       # 只在真的补进来时才落盘
+            try:
+                save_devices(d)
+            except Exception:
+                pass
+    return d
 
 
 def save_devices(d: dict):
@@ -91,13 +132,15 @@ def seed_devices_from_identity():
     """把当前 identity.json 作为 '默认' 设备登入档案库（幂等）"""
     devs = load_devices()
     ident = load_identity()
-    if not devs:
+    # ★ 判据必须是「'默认' 在不在」，不能用 `not devs`：
+    #   带设备池后 devs 至少 98 台，`not devs` 恒为 False ⇒ 真机永远播不进来。
+    if "默认" not in devs:
         nd = ident.to_dict()
         nd["_note"] = "初始导入"
         devs["默认"] = nd
         save_devices(devs)
-        if not get_active_name():
-            set_active_name("默认")
+    if not get_active_name():
+        set_active_name("默认")
     return devs
 
 
@@ -954,6 +997,8 @@ def cmd_submit(args):
             prep = swmode.prepare(c, mode, args.dist, campus_lat=clat,
                                   campus_lon=clon, unid=unid,
                                   start=args.start, pace=args.pace,
+                                  shape=args.shape,
+                                  straight_m=getattr(args, "track_straight", 0.0),
                                   force_points=args.force_points)
         except Exception as e:
             print("[ERR] 轨迹准备失败: %s" % e)
@@ -1206,6 +1251,11 @@ def build_parser():
     sp.add_argument("--mode", choices=["free", "score"], default=None,
                     help="free=自由跑(校园范围内,无需打卡点) / score=计分跑(必须过打卡点)")
     sp.add_argument("--dist", type=float, default=2.2, help="目标距离 km（--mode 时用）")
+    sp.add_argument("--shape", choices=["ellipse", "track"], default="ellipse",
+                    help="轨迹形状：ellipse=椭圆（默认，最稳）；"
+                         "track=标准跑道（两个半圆 + 两条直道）")
+    sp.add_argument("--track-straight", type=float, default=0.0,
+                    help="跑道形状的直道长度（米）；0=按打卡点自适应")
     sp.add_argument("--campus-lat", type=float, default=None, help="校区中心纬度")
     sp.add_argument("--campus-lon", type=float, default=None, help="校区中心经度")
     sp.add_argument("--address", default=None,

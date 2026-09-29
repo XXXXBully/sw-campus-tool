@@ -133,6 +133,94 @@ def is_ratelimit(err: str) -> bool:
     return "10603" in (err or "")
 
 
+# ============================================================
+# ★★ 校区打卡点池（2026-09-29 新增）
+# ============================================================
+#   服务端每个校区的打卡点是**固定一池**（揭阳校区 = 田径场1~6 共 6 个），
+#   每次只随机下发其中 5 个。而"真实跑道"的几何必须靠**完整点池**才能定出来：
+#   若本次恰好没下发最北的「田径场2」，只用这 5 个点去拟合，跑道会被压成
+#   近乎圆形（实测外接 96.9×95.1，而不是 163.6×75.5）。
+#
+#   ⇒ 每次拿到点位就并进池子（按 unid），生成"跑道"形状时用**池子**拟合，
+#     轨迹于是仍会经过这次没下发、但确实存在于跑道上的那个点
+#     —— 这才是真实跑道的走法。
+POOL_FILE = os.path.join(HERE, "points_pool.json")
+
+
+def _pool_load() -> dict:
+    if os.path.exists(POOL_FILE):
+        try:
+            d = json.load(open(POOL_FILE, encoding="utf-8"))
+            if isinstance(d, dict):
+                return d
+        except Exception:
+            pass
+    return {}
+
+
+def merge_points_pool(points: list, unid: int = 0) -> list:
+    """把本次下发的打卡点并进「校区池」，返回该池的全部点。"""
+    if not points:
+        return []
+    d = _pool_load()
+    key = str(int(unid or 0))
+    cur = {}
+    for p in d.get(key) or []:
+        if isinstance(p, dict) and p.get("pointName"):
+            cur[p["pointName"]] = p
+    for p in points:
+        if isinstance(p, dict) and p.get("pointName"):
+            cur[p["pointName"]] = p
+    d[key] = list(cur.values())
+    try:
+        json.dump(d, open(POOL_FILE, "w", encoding="utf-8"),
+                  ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+    return d[key]
+
+
+def _centroid(points: list):
+    pts = [p for p in points if p.get("lat") is not None]
+    if not pts:
+        return None
+    return (sum(float(p["lat"]) for p in pts) / len(pts),
+            sum(float(p["lon"]) for p in pts) / len(pts))
+
+
+def pool_points(points: list, unid: int = 0, max_km: float = 5.0) -> list:
+    """取与本次点集**同一校区**的完整点池（并入本次点）。
+
+    unid 命中就直接用；否则退回"质心 5 km 内最接近的那个池"
+    （老版本留下的池可能没记 unid）。取不到就原样返回本次点。
+    """
+    d = _pool_load()
+    pool = list(d.get(str(int(unid or 0))) or [])
+    if not pool:
+        c = _centroid(points)
+        best, best_d = None, float("inf")
+        if c is not None:
+            for v in d.values():
+                if not isinstance(v, list) or not v:
+                    continue
+                cc = _centroid(v)
+                if cc is None:
+                    continue
+                dd = haversine(c[0], c[1], cc[0], cc[1]) / 1000.0
+                if dd < best_d:
+                    best, best_d = v, dd
+        if best is not None and best_d <= max_km:
+            pool = list(best)
+    if not pool:
+        return list(points)
+    # 合并（本次点覆盖同名旧点，保证用最新坐标）
+    merged = {}
+    for p in pool + list(points):
+        if isinstance(p, dict) and p.get("pointName"):
+            merged[p["pointName"]] = p
+    return list(merged.values())
+
+
 def get_points(c, lat: float, lon: float, unid: int, *,
                force: bool = False, verbose: bool = True):
     """返回 (points, source)。source ∈ {"cache","remote","rate-limited"}
@@ -212,6 +300,12 @@ def get_points(c, lat: float, lon: float, unid: int, *,
         #   干脆不写：不可达的点位对计分跑本来也没用（上层会拦）。
         if _cache_is_credible(pts, anchor):
             save_cache(pts, anchor=anchor)
+            # ★★ 同时并进「校区打卡点池」：跑道形状要靠完整点池才能拟合出
+            #    真实几何（见 `pool_points` 的注释）。
+            merged = merge_points_pool(pts, unid)
+            if verbose and len(merged) > len(pts):
+                print("  [点池] 本校区累计已知打卡点 %d 个（本次下发 %d 个）"
+                      % (len(merged), len(pts)))
         elif verbose:
             print("  [警告] 打卡点距校区超出 %.0fkm（不可达），**不写入缓存**"
                   "（避免把错学校的点位存下来）" % REACHABLE_KM)
@@ -438,6 +532,8 @@ def _pick_anchor(use: list, verbose: bool = True) -> dict:
 def gen_score_track(points: list, dist_km: float, *,
                     start: str = None, pace: str = "5:40",
                     cadence: int = 0, seed: int = 0, outdir: str = None,
+                    shape: str = "ellipse", unid: int = 0,
+                    straight_m: float = 0.0,
                     verbose: bool = True) -> str:
     """计分跑：把打卡点串成闭环，多圈重复至目标距离
 
@@ -451,8 +547,22 @@ def gen_score_track(points: list, dist_km: float, *,
     if not raw:
         raise ValueError("计分跑需要打卡点，但点位列表为空")
     use = to_wgs_points(raw)
+
+    # ★★ 跑道形状必须用「校区完整点池」拟合（2026-09-29 用户要求）：
+    #    服务端每次只下发 5 个，但校区固定一池 6 个。若本次恰好没下发最北的
+    #    那个点，只用 5 个点拟合会把跑道压成近乎圆形 —— 而真实跑者跑的是
+    #    完整的 400 m 跑道，**那个没下发的点他照样会经过**。
+    #    ⇒ 用池子拟合；因为池 ⊇ 本次下发，所以"必经点必中"不受影响。
+    fit_raw = raw
+    if shape == "track":
+        fit_raw = pool_points(raw, unid)
+        if verbose and len(fit_raw) > len(raw):
+            print("  [跑道] 按完整点池拟合（%d 个，其中 %d 个本次未下发，"
+                  "轨迹仍会经过）" % (len(fit_raw), len(fit_raw) - len(raw)))
+    use_fit = to_wgs_points(fit_raw) if fit_raw is not raw else use
+
     outdir = outdir or os.path.join(HERE, "generator", "output")
-    anchor = _pick_anchor(use, verbose=verbose)
+    anchor = _pick_anchor(use_fit, verbose=verbose)
     cmd = _gen_cmd() + [
         "--dist", "%.2f" % dist_km,
         "--start", start or _fmt_start(),
@@ -461,8 +571,13 @@ def gen_score_track(points: list, dist_km: float, *,
         "--mode", "loop",
         "--pace", pace,
         "--outdir", outdir,
+        "--shape", shape,
     ]
-    for p in use:
+    if straight_m and straight_m > 0:
+        # ★ 跑道形状的直道长度（米）。0/缺省 = 按打卡点自适应
+        #   （实测揭阳点池自适应出 S=88.1、R=37.7，与 IAAF 400m 的 84.39/36.5 几乎一致）
+        cmd += ["--track-straight", "%g" % straight_m]
+    for p in use_fit:
         cmd += ["--cp", "%s:%.6f:%.6f:%g"
                 % (p["pointName"], p["lat"], p["lon"], p["radius"])]
     if cadence:
@@ -716,6 +831,7 @@ def prepare(c, mode: str, dist_km: float, *, campus_lat: float = None,
             campus_lon: float = None, unid: int = 0, start: str = None,
             pace: str = "5:40", cadence: int = 0, seed: int = 0,
             outdir: str = None, force_points: bool = False,
+            shape: str = "ellipse", straight_m: float = 0.0,
             verbose: bool = True) -> dict:
     """按模式准备轨迹。
 
@@ -781,7 +897,9 @@ def prepare(c, mode: str, dist_km: float, *, campus_lat: float = None,
     res["points"] = pts
     res["track"] = gen_score_track(pts, gen_km, start=start, pace=pace,
                                    cadence=cadence, seed=seed,
-                                   outdir=outdir, verbose=verbose)
+                                   outdir=outdir, shape=shape, unid=unid,
+                                   straight_m=straight_m,
+                                   verbose=verbose)
     if verbose:
         print("  [校验] 必经点命中 & 闭合性")
     # ★ 顺序：先校验**完整闭环**（20m 严阈值），再留口（展示层修饰）

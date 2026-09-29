@@ -62,6 +62,30 @@ POINT_JITTER_M = float(os.environ.get("RGEN_POINT_JITTER_M", "3.5"))
 
 
 # ============================================================
+# ★★ 轨迹形状（2026-09-29 新增，用户可选）
+# ============================================================
+#   ellipse —— 现状：在打卡点上做**闭合 Catmull-Rom 样条**（圆润的环）。
+#              经过全部打卡点，最稳，5 点/6 点都不会畸形。
+#   track   —— 标准田径场：**两个半圆 + 两条直道**。
+#              先按打卡点的「最小面积外接矩形」定出长轴与宽窄，
+#              再把直道长度 / 半圆半径解出来，最后仍由
+#              `_scale_about_anchors` 吸附到打卡点上（保证必中）。
+SHAPE_ELLIPSE = "ellipse"
+SHAPE_TRACK = "track"
+SHAPES = (SHAPE_ELLIPSE, SHAPE_TRACK)
+
+# 直道长度（米）。0 / 负值 = **按打卡点自适应**（= 外接矩形长边 − 短边）。
+#   真机揭阳校区实测：自适应得到 R≈40 m、直道≈81 m、周长≈417 m，
+#   与真实 400 m 跑道（直道 84.39 m / 半径 36.5 m）几乎一致。
+#   想强行固定成某个值（例如 50 m）可用 `RGEN_TRACK_STRAIGHT_M` 覆盖。
+TRACK_STRAIGHT_M = float(os.environ.get("RGEN_TRACK_STRAIGHT_M", "0"))
+
+# 跑道曲线采样步长（米）。必须足够密，否则 Catmull-Rom 会把直道
+#   切出肉眼可见的折角（直道本来就该是直的）。
+TRACK_STEP_M = 2.0
+
+
+# ============================================================
 # 平面坐标转换 (等距圆柱, 校园尺度足够精确)
 # ============================================================
 def _to_xy(lat0: float, lon0: float,
@@ -193,12 +217,177 @@ def _jitter_points(ring: Sequence[Tuple[float, float]],
 
 
 # ============================================================
+# ★ 跑道形状：最小面积外接矩形 + 「两个半圆 + 两条直道」
+# ============================================================
+def _convex_hull(pts: Sequence[Tuple[float, float]]
+                 ) -> List[Tuple[float, float]]:
+    """Andrew 单调链求凸包（返回逆时针、无重复首点）。"""
+    ps = sorted(set((float(x), float(y)) for x, y in pts))
+    if len(ps) <= 2:
+        return ps
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower: List[Tuple[float, float]] = []
+    for p in ps:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper: List[Tuple[float, float]] = []
+    for p in reversed(ps):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return lower[:-1] + upper[:-1]
+
+
+def _min_area_obb(pts: Sequence[Tuple[float, float]]):
+    """最小面积外接矩形（旋转卡壳）。
+
+    返回 `(cx, cy, u, w, h)`：中心、长轴单位向量、长边长度、短边长度。
+
+    ★ 为什么用它而不是 PCA / 协方差主轴（2026-09-29 实测教训）：
+      打卡点只有 5 个、且分布在环上，**协方差主轴极不稳定** ——
+      实测「6 选 5」里最差的一组主轴算成 60.7°（真值 ≈ 90°），
+      于是 R/S 全错，拟合出的"跑道"离打卡点最远 **38 m**（阈值 20 m）。
+      外接矩形对点集扰动的敏感度低得多，且天然给出"长边/短边"。
+    """
+    hull = _convex_hull(pts)
+    if len(hull) < 3:
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        return ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0,
+                (1.0, 0.0), max(xs) - min(xs), max(ys) - min(ys))
+
+    best = None
+    n = len(hull)
+    for i in range(n):
+        ax, ay = hull[i]
+        bx, by = hull[(i + 1) % n]
+        dx, dy = bx - ax, by - ay
+        seg = math.hypot(dx, dy)
+        if seg < 1e-9:
+            continue
+        ux, uy = dx / seg, dy / seg
+        vx, vy = -uy, ux
+        us = [p[0] * ux + p[1] * uy for p in hull]
+        vs = [p[0] * vx + p[1] * vy for p in hull]
+        w = max(us) - min(us)
+        h = max(vs) - min(vs)
+        area = w * h
+        if best is None or area < best[0] - 1e-9:
+            cu = (max(us) + min(us)) / 2.0
+            cv = (max(vs) + min(vs)) / 2.0
+            best = (area, cu * ux + cv * vx, cu * uy + cv * vy, (ux, uy), w, h)
+    _area, cx, cy, u, w, h = best
+    if w < h:                       # 保证 u 指向长边
+        u = (-u[1], u[0])
+        w, h = h, w
+    return cx, cy, u, w, h
+
+
+def _stadium_ring(start: Tuple[float, float],
+                  waypoints: Sequence[Tuple[float, float]],
+                  straight_m: float = None,
+                  step: float = TRACK_STEP_M
+                  ) -> List[Tuple[float, float]]:
+    """把打卡点拟合成标准田径场（两个半圆 + 两条直道），返回经纬度闭环顶点。
+
+    几何：直道长 `S`、半圆半径 `R` ⇒ 周长 = `2S + 2πR`。
+      · `R` = 外接矩形短边的一半（跑道的"宽"）
+      · `S` = 外接矩形长边 − 短边（自适应）；给了 `straight_m` 就用给定值
+    曲线在**打卡点所在平面**里生成，随后仍由 `plan_route` 的
+    `_scale_about_anchors` 吸附，保证每个打卡点都必中。
+    """
+    la0, lo0 = start
+    wxy = _to_xy(la0, lo0, list(waypoints))
+    cx, cy, u, w, h = _min_area_obb(wxy)
+
+    R = max(h / 2.0, 5.0)
+    S = max(w - h, 0.0)
+    if straight_m is not None and straight_m > 0:
+        S = float(straight_m)
+
+    vx, vy = -u[1], u[0]
+
+    def P(a: float, b: float) -> Tuple[float, float]:
+        return (cx + a * u[0] + b * vx, cy + a * u[1] + b * vy)
+
+    half = S / 2.0
+    n_str = max(2, int(round(S / step))) if S > 1e-6 else 0
+    n_arc = max(6, int(round(math.pi * R / step)))
+
+    pts: List[Tuple[float, float]] = []
+    # 直道 1（-half → +half，在 -R 侧）
+    for i in range(n_str + 1):
+        pts.append(P(-half + S * i / max(1, n_str), -R))
+    # 半圆 1（右端，-R → +R）
+    for i in range(1, n_arc + 1):
+        ang = -math.pi / 2.0 + math.pi * i / n_arc
+        pts.append(P(half + R * math.cos(ang), R * math.sin(ang)))
+    # 直道 2（+half → -half，在 +R 侧）
+    for i in range(1, n_str + 1):
+        pts.append(P(half - S * i / max(1, n_str), R))
+    # 半圆 2（左端，+R → -R）；末点与首点重合由调用方 `_open_ring` 处理
+    for i in range(1, n_arc + 1):
+        ang = math.pi / 2.0 + math.pi * i / n_arc
+        pts.append(P(-half + R * math.cos(ang), R * math.sin(ang)))
+
+    ll = _to_ll(la0, lo0, pts)
+    ll = rotate_ring(ll, start)
+    return ll + [ll[0]]
+
+
+def _stadium_nearest(start: Tuple[float, float],
+                     waypoints: Sequence[Tuple[float, float]],
+                     straight_m: float = None) -> Tuple[float, float]:
+    """把 `start` 投到「由打卡点拟合出的那条跑道曲线」上，返回投影点经纬度。
+
+    ★★ 为什么必须做（2026-09-29 实测）：`swmode._pick_anchor` 是按**打卡点
+      构成的环**挑起点的（最大角空隙中点），它并不知道我们要画跑道；
+      于是起点可能落在跑道**外侧** 44.6 m 处。LOOP 是 `start → 各 cp → start`，
+      起点在环外 ⇒ 轨迹必须"出去一趟再回来" ⇒ 地图上多一根 44 m 的**引线**，
+      外接矩形被撑宽（实测 163×75 的跑道变成 167×119），直道也被拉弯。
+      ⇒ 跑道形状下，先把起点投到跑道曲线上，再走后面的流程。
+    """
+    la0, lo0 = start
+    wxy = _to_xy(la0, lo0, list(waypoints))
+    cx, cy, u, w, h = _min_area_obb(wxy)
+    R = max(h / 2.0, 5.0)
+    S = max(w - h, 0.0)
+    if straight_m is not None and straight_m > 0:
+        S = float(straight_m)
+
+    vx, vy = -u[1], u[0]
+    px, py = 0.0, 0.0                      # start 在局部 XY 里就是原点
+    a = (px - cx) * u[0] + (py - cy) * u[1]
+    b = (px - cx) * vx + (py - cy) * vy
+    half = S / 2.0
+    if abs(a) <= half:                     # 投影到直道
+        qa, qb = a, (R if b >= 0 else -R)
+    else:                                  # 投影到半圆
+        ca = half if a > 0 else -half
+        da, db = a - ca, b
+        L = math.hypot(da, db)
+        if L < 1e-9:
+            qa, qb = ca, R
+        else:
+            qa, qb = ca + R * da / L, R * db / L
+    qx = cx + qa * u[0] + qb * vx
+    qy = cy + qa * u[1] + qb * vy
+    return _to_ll(la0, lo0, [(qx, qy)])[0]
+
+
+# ============================================================
 # ★ 核心: 构建经过所有打卡点的基础环
 # ============================================================
 def _build_base_loop(start: Tuple[float, float],
                      waypoints: Sequence[Tuple[float, float]],
                      rng: random.Random,
-                     bulge: float = 1.35) -> List[Tuple[float, float]]:
+                     bulge: float = 1.35,
+                     shape: str = SHAPE_ELLIPSE,
+                     straight_m: float = None) -> List[Tuple[float, float]]:
     """
     构建一条"经过起点和所有打卡点"的基础闭合环。
 
@@ -241,6 +430,15 @@ def _build_base_loop(start: Tuple[float, float],
                       + 0.09 * math.sin(5 * math.radians(ang) + rng.uniform(0, 3)))
             ctrl.append(dest_point(start[0], start[1], ang, rr))
         return ctrl + [ctrl[0]]
+
+    # ★★ 形状分派（2026-09-29）：`track` = 标准田径场（两个半圆 + 两条直道）
+    #   注意：跑道形状**不做打卡点抖动**（`_jitter_points`）——
+    #   曲线本来就不在打卡点上，抖动只会让拟合整体平移，而下游
+    #   `_scale_about_anchors` 又会把它拉回来，等于白抖。
+    if shape == SHAPE_TRACK:
+        return _stadium_ring(start, waypoints,
+                             straight_m=(straight_m if straight_m is not None
+                                         else TRACK_STRAIGHT_M))
 
     # 1. 最短访问顺序 (含起点), 闭合环顶点序列 [start, wp...]
     #
@@ -557,6 +755,7 @@ def _repeat_to_length(base: Sequence[Tuple[float, float]],
                       lateral_m: float = LAP_LATERAL_M,
                       waypoints: Sequence[Tuple[float, float]] = (),
                       anchor: Optional[Tuple[float, float]] = None,
+                      rescale: bool = True,
                       ) -> Tuple[List[Tuple[float, float]], int]:
     """
     把基础环重复若干圈, 使总长接近 target_len。
@@ -568,6 +767,11 @@ def _repeat_to_length(base: Sequence[Tuple[float, float]],
            纯质心缩放会把**起点**推离 anchor (实测 44m), 之后只能靠
            刚体平移把起点拉回去 —— 而平移会把打卡点一起拖走, 打卡全废。
         4. 逐圈拼接, 圈间轻微侧偏 (更像真人跑), 接缝点不重复
+
+    :param rescale: 是否在拼接前把 `base` 缩放到 `ideal_one`。
+        ★ 跑道形状（`track`）传 **False** —— 它要求「每圈精确重放同一条
+        跑道曲线」，任何预缩放都会让曲线脱离拟合出的几何；长度改由
+        调用方 `_plan_track_loop` 的**纯缩放**一次性解决。
 
     返回 (闭环顶点列表, 圈数)
     """
@@ -607,7 +811,7 @@ def _repeat_to_length(base: Sequence[Tuple[float, float]],
     ideal_one = target_len / laps
     ratio = ideal_one / one_len
 
-    if 0.55 <= ratio <= 3.0:
+    if rescale and 0.55 <= ratio <= 3.0:
         # ★ 缩放中心: 必须同时兼顾 "打卡点不乱跑" 和 "起点不乱跑"。
         #   用起点 + 打卡点质心的加权平均作为缩放中心, 并且缩放后
         #   把整条环平移回 anchor —— 这样两者都能回到原位附近。
@@ -620,23 +824,25 @@ def _repeat_to_length(base: Sequence[Tuple[float, float]],
         if anchor is not None:
             # 起点权重与打卡点同权 (几何上这就是"绕起点和打卡点一起缩放")
             k = 1.0 / (len(waypoints) + 1.0) if waypoints else 0.0
-            cx = gx + (anchor[0] - gx) * k
-            cy = gy + (anchor[1] - gy) * k
+            zcx = gx + (anchor[0] - gx) * k
+            zcy = gy + (anchor[1] - gy) * k
         else:
-            cx, cy = gx, gy
-        base = [(cx + (la - cx) * ratio, cy + (lo - cy) * ratio)
+            zcx, zcy = gx, gy
+        base = [(zcx + (la - zcx) * ratio, zcy + (lo - zcy) * ratio)
                 for la, lo in base]
         # ★ 缩放后把环整体平移, 让第一个顶点回到 anchor
         if anchor is not None:
             d_la = anchor[0] - base[0][0]
             d_lo = anchor[1] - base[0][1]
             base = [(la + d_la, lo + d_lo) for la, lo in base]
-    elif anchor is not None:
+    elif rescale and anchor is not None:
         base = scale_to_length(base, ideal_one)
 
     # 环中心 (用于计算"向外偏移"方向)
-    cy = sum(p[0] for p in base) / len(base)
-    cx = sum(p[1] for p in base) / len(base)
+    #   ★ 命名纠正（2026-09-29）：原为 `cy`/`cx`，实际存的是 lat/lon，
+    #     极易与「中心」语义混淆 —— 下文 `bearing(c_lat, c_lon, ...)` 才正确。
+    c_lat = sum(p[0] for p in base) / len(base)
+    c_lon = sum(p[1] for p in base) / len(base)
 
     ctrl: List[Tuple[float, float]] = []
     # ★★ 圈间侧偏：必须**小且围绕基准线摆动**（2026-09-27 修）
@@ -677,11 +883,103 @@ def _repeat_to_length(base: Sequence[Tuple[float, float]],
                 if off_i <= 1e-9:
                     ctrl.append((la, lo))
                 else:
-                    brg = bearing(cy, cx, la, lo)
+                    brg = bearing(c_lat, c_lon, la, lo)
                     ctrl.append(dest_point(la, lo, brg, off_i))
 
     ctrl.append(ctrl[0])                    # 闭合
     return ctrl, laps
+
+
+# ============================================================
+# ★★ 跑道形状（两个半圆 + 两条直道）专用闭环流程
+# ============================================================
+def _track_zoom(path_xy: Sequence[Tuple[float, float]],
+                targets_xy: Sequence[Tuple[float, float]],
+                target_len: float) -> List[Tuple[float, float]]:
+    """跑道专用「纯缩放」：以「打卡点质心 + 起点」加权中心缩放，再把首点钉回原位。
+
+    ★ 为什么不用 `_scale_about_anchors`（2026-09-29 实测定因）：
+      它内部的 `_snap_to_targets` 用**半径 ≈ 0.42 圈**的高斯场把曲线往锚点拽
+      （`sig = (n-1)/12` 点）。对椭圆无害 —— 椭圆本来就过打卡点，`need ≈ 0`，
+      几乎不拉；对跑道却是纯破坏：实测直道残差 **0.04 → 11.06 m**、
+      半圆半径离散 **0.05 → 3.74 m**，画出来就是「弯的直道」（用户肉眼可见）。
+      而跑道曲线**本来就经过所有打卡点**（拟合误差仅 0.04~2.28 m），
+      根本不需要吸附 —— 纯缩放后打卡点最差仅 **4.28 m**（阈值 20 m）。
+    """
+    if not path_xy or len(path_xy) < 3:
+        return list(path_xy)
+    cur = _xy_len(path_xy)
+    if cur <= 1e-9:
+        return list(path_xy)
+    k = target_len / cur
+    if targets_xy:
+        gx = sum(t[0] for t in targets_xy) / len(targets_xy)
+        gy = sum(t[1] for t in targets_xy) / len(targets_xy)
+        # 起点与打卡点同权 —— 纯质心缩放会把起点推离 anchor（实测 44 m）
+        kk = 1.0 / (len(targets_xy) + 1.0)
+        zx = gx + (path_xy[0][0] - gx) * kk
+        zy = gy + (path_xy[0][1] - gy) * kk
+    else:
+        zx, zy = path_xy[0]
+    out = [(zx + (x - zx) * k, zy + (y - zy) * k) for x, y in path_xy]
+    # 缩放会让首点漂移 ⇒ 刚体平移钉回（平移量小，对打卡点影响 ≤ 数米）
+    dx = path_xy[0][0] - out[0][0]
+    dy = path_xy[0][1] - out[0][1]
+    return [(x + dx, y + dy) for x, y in out]
+
+
+def _plan_track_loop(start: Tuple[float, float],
+                     waypoints: Sequence[Tuple[float, float]],
+                     target_len: float,
+                     rng: random.Random,
+                     straight_m: float = None,
+                     noise_sigma_m: float = 0.0,
+                     lateral_m: float = LAP_LATERAL_M,
+                     ) -> Tuple[List[Tuple[float, float]], int]:
+    """跑道形状的专用闭环规划：**精确重放跑道环 N 圈 + 纯缩放**。
+
+    与通用管线的区别：不做 Catmull-Rom 样条、不做锚点吸附（见 `_track_zoom`），
+    因此全程保持「两个半圆 + 两条直道」的几何，打卡点靠「曲线本身过点」保证。
+
+    流程：起点投到跑道曲线 → 拟合跑道环 → 重放 N 圈（含圈间侧偏）
+          → 纯缩放到目标长 → 钉起点。
+
+    ★★ 为什么默认 `noise_sigma_m=0`（2026-09-29 实测定因）：
+      跑道环的点间距只有 **0.17 m**（2 m 一个控制点，闭合环 208 点/圈），
+      而 `_add_tangential_noise` 的 σ = 1.6 m 比点间距**大一个数量级** ⇒
+      相邻点被独立推来推去、曲线锯齿化，**折线长度虚增 31.7%**
+      （实测 2000.0 → 2634.1 m，而外接矩形几乎不变）。
+      随后「噪声后再归一化」拿这个被污染的长度去缩 ⇒ **整体缩小 24%**
+      （实测 OBB 158×74 → 121×57，打卡点偏 27 m，越过 20 m 阈值）。
+      椭圆形状之所以没炸，是因为它的锚点吸附会把曲线重新拉回打卡点，
+      把长度污染掩盖掉了 —— 跑道没有吸附，于是暴露。
+      ⇒ 米级噪声必须加在「点间距 ≳ 噪声」的轨迹上；本流程点太密，不加。
+      真机观感验证：跑道轨迹本就沿跑道规整，无抖动不影响真实感。
+    """
+    sm = straight_m if straight_m is not None else TRACK_STRAIGHT_M
+    st = _stadium_nearest(start, waypoints, straight_m=sm)
+    ring = _stadium_ring(st, waypoints, straight_m=sm)
+    ctrl, laps = _repeat_to_length(ring, target_len, rng, lateral_m=lateral_m,
+                                   waypoints=waypoints, anchor=st, rescale=False)
+
+    la0, lo0 = ctrl[0]
+    xy = _track_zoom(_to_xy(la0, lo0, ctrl),
+                     _to_xy(la0, lo0, list(waypoints)), target_len)
+    ll = _to_ll(la0, lo0, xy)
+
+    if noise_sigma_m > 0:
+        # 仅在调用方显式要求时启用；见上文，点间距 0.17 m 下必须用极小值
+        step = target_len / max(1, len(ll))
+        sig = min(float(noise_sigma_m), 0.3 * step)
+        ll = _add_tangential_noise(ll, sig, rng, closed=True)
+        la1, lo1 = ll[0]
+        ll = _to_ll(la1, lo1, _track_zoom(_to_xy(la1, lo1, ll),
+                                          _to_xy(la1, lo1, list(waypoints)),
+                                          target_len))
+
+    # 起点硬锚定（刚体平移；跑道下首点本就在曲线上，平移量 ≈ 0）
+    ll = anchor_ring(ll, st)
+    return ll, laps
 
 
 # ============================================================
@@ -695,6 +993,8 @@ def plan_route(start: Tuple[float, float],
                rng: Optional[random.Random] = None,
                noise_sigma_m: float = 1.6,
                bulge: float = 1.35,
+               shape: str = SHAPE_ELLIPSE,
+               straight_m: float = None,
                ) -> Tuple[List[Tuple[float, float]], int]:
     """
     规划完整路线。
@@ -709,6 +1009,13 @@ def plan_route(start: Tuple[float, float],
     waypoints = [(float(a), float(b)) for a, b in waypoints]
     closed = (mode == RouteMode.LOOP)
 
+    # ★★ 跑道形状：起点必须落在跑道曲线上，否则 LOOP 会"从环外进出一次"
+    #   ⇒ 多一根引线 + 外接矩形被撑宽（实测起点偏 44.6 m）。见 `_stadium_nearest`。
+    if closed and waypoints and shape == SHAPE_TRACK:
+        start = _stadium_nearest(
+            start, waypoints,
+            straight_m=(straight_m if straight_m is not None else TRACK_STRAIGHT_M))
+
     # ---------- 1. 构建控制点 ----------
     pin_end: Optional[Tuple[float, float]] = None
     if mode == RouteMode.POINT2POINT:
@@ -719,7 +1026,8 @@ def plan_route(start: Tuple[float, float],
         degenerate = (haversine(start[0], start[1], end_pt[0], end_pt[1]) < 50.0
                       and not waypoints)
         if degenerate:
-            base = _build_base_loop(start, waypoints, rng, bulge=bulge)
+            base = _build_base_loop(start, waypoints, rng, bulge=bulge,
+                                    shape=shape, straight_m=straight_m)
             ctrl, laps = _repeat_to_length(base, target_len, rng, lateral_m=0.0,
                                            anchor=start)
             mode = RouteMode.LOOP
@@ -819,7 +1127,15 @@ def plan_route(start: Tuple[float, float],
                             + ctrl[bi + 1:])
 
     else:
-        base = _build_base_loop(start, waypoints, rng, bulge=bulge)
+        # ★★ 跑道形状：走专用闭环流程（精确重放 + 纯缩放），
+        #   绕开通用管线的 Catmull-Rom 样条与锚点吸附 —— 后者的
+        #   「半圈高斯吸附」会把拟合好的跑道拉弯（直道残差 0.04 → 11.06 m）。
+        #   见 `_plan_track_loop` / `_track_zoom`。
+        if shape == SHAPE_TRACK and waypoints:
+            return _plan_track_loop(start, waypoints, target_len, rng,
+                                    straight_m=straight_m)
+        base = _build_base_loop(start, waypoints, rng, bulge=bulge,
+                                shape=shape, straight_m=straight_m)
         ctrl, laps = _repeat_to_length(
             base, target_len, rng,
             lateral_m=(0.0 if len(waypoints) == 0 else LAP_LATERAL_M),

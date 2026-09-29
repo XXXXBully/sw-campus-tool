@@ -27,7 +27,7 @@ from .core import (
     DEFAULT_SAMPLE_INTERVAL, IVP_W2, IVP_W3, IVP_W4, IVP_W5,
 )
 from .route import (RouteMode, plan_route, nearest_index, min_tour_length,
-                    add_sample_noise)
+                    add_sample_noise, SHAPE_ELLIPSE, SHAPES)
 
 
 class RunningGenerator:
@@ -59,6 +59,7 @@ class RunningGenerator:
                  seed: Optional[int] = None,
                  target_duration_s: Optional[float] = None,
                  noise_sigma_m: float = 1.6,
+                 shape: str = SHAPE_ELLIPSE,
                  ):
 
         self.start = (float(start[0]), float(start[1]))
@@ -67,6 +68,8 @@ class RunningGenerator:
         self.end = end
         self.dt = float(sample_interval_s)
         self.noise_sigma_m = noise_sigma_m
+        # ★★ 轨迹形状（2026-09-29）：ellipse = 现状圆润环；track = 标准田径场
+        self.shape = shape if shape in SHAPES else SHAPE_ELLIPSE
 
         # 打卡点
         self.checkpoints: List[Checkpoint] = []
@@ -286,7 +289,7 @@ class RunningGenerator:
         #    只虚增 ~1%, 标定倍数回到 ~1.01, 打卡点几乎不动。
         coords, self.laps = plan_route(self.start, waypoints, self.distance_m,
                                        mode=self.mode, end=self.end, rng=rng,
-                                       noise_sigma_m=0.0)
+                                       noise_sigma_m=0.0, shape=self.shape)
 
         # 几何点数与采样点数对齐: 将几何按弧长重采样到 n 点
         coords = self._align_geometry(coords, n, speeds)
@@ -1185,6 +1188,7 @@ def generate_record(start_lat: float, start_lon: float, distance_km: float,
                     height_cm: float = 172.0, weight_kg: float = 65.0,
                     age: int = 22, fitness: float = 0.5,
                     sample_interval_s: float = DEFAULT_SAMPLE_INTERVAL,
+                    shape: str = SHAPE_ELLIPSE,
                     ) -> TrackRecord:
     """一行生成完整跑步记录
 
@@ -1208,5 +1212,6 @@ def generate_record(start_lat: float, start_lon: float, distance_km: float,
         end=end,
         seed=seed,
         sample_interval_s=sample_interval_s,
+        shape=shape,
     )
     return gen.generate()

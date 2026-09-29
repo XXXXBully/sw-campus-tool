@@ -31,6 +31,7 @@ from .core import (
 from .route import (
     RouteMode, plan_route, catmull_rom,
     nearest_index, polyline_length, min_tour_length,
+    SHAPE_ELLIPSE, SHAPE_TRACK, SHAPES,
 )
 from .engine import RunningGenerator, generate_record
 
@@ -40,6 +41,7 @@ __all__ = [
     "fmt_pace", "fmt_duration", "parse_pace", "DEFAULT_SAMPLE_INTERVAL",
     "RouteMode", "plan_route", "catmull_rom",
     "nearest_index", "polyline_length", "min_tour_length",
+    "SHAPE_ELLIPSE", "SHAPE_TRACK", "SHAPES",
     "RunningGenerator", "generate_record",
 ]
 

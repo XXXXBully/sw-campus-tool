@@ -227,10 +227,16 @@ class EnvelopeSession:
 # ══════════════════════════════════════════════════════════════════
 class Identity:
     """设备身份。device_id / app_install_time 必须持久稳定（漂移会触发 10121 风控）。
-    platform: "android" 或 "ios"，决定请求头/UA/安装时间惯例。"""
+    platform: "android" 或 "ios"，决定请求头/UA/安装时间惯例。
+
+    ★ 2026-09-29：默认 city 由 "大连市" 改为 "揭阳市" —— 本工具面向的是
+      **广东工业大学揭阳校区**（见 campus.py 的 KNOWN_CAMPUS），默认设备城市
+      应与校区一致。此前硬编码 "大连市" 会让每台新生成的「默认」设备都带一个
+      与用户毫无关系的城市（用户反馈「那个大连的默认设备」）。
+      注意：城市不进发布包 —— pack_all.py 的 BAD_IDENTITY 会拦身份文件里的城市名。"""
 
     def __init__(self, device_id="", app_install_time=0, os_version="14",
-                 device_name="22081212C", city="大连市", platform="android"):
+                 device_name="22081212C", city="揭阳市", platform="android"):
         self.device_id = device_id or str(uuid.uuid4()).upper()
         # 安装时间惯例：android=90天前；ios=3天前
         self.app_install_time = app_install_time or (now_ms() - (
@@ -252,7 +258,7 @@ class Identity:
                    app_install_time=d.get("app_install_time", 0),
                    os_version=d.get("os_version", "14"),
                    device_name=d.get("device_name", "22081212C"),
-                   city=d.get("city", "大连市"),
+                   city=d.get("city", "揭阳市"),
                    platform=d.get("platform", "android"))
 
 

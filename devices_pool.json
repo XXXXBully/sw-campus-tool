@@ -1,0 +1,982 @@
+{
+  "guise-K60U": {
+    "device_id": "a119a5beb98c4426a6975ecdfe699dba",
+    "device_name": "Redmi 23078RKD5C",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-K70": {
+    "device_id": "e213a69cc13a4644aaa098bced3eefb3",
+    "device_name": "Redmi 23113RKC6C",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iQOO12 Pro": {
+    "device_id": "982eb8dfe6bc4261b75cfe2b4492506d",
+    "device_name": "vivo V2329A",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-K70 Pro": {
+    "device_id": "494115b2dff3458091d40931c369e50a",
+    "device_name": "Redmi 23117RK66C",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 15 Pro Max": {
+    "device_id": "8cd023eb4fc34d1ba155f1a89e310bc4",
+    "device_name": "Apple iPhone 15 Pro Max",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-K60P": {
+    "device_id": "96ae2f1dbdbc495592a1e23666f04055",
+    "device_name": "Redmi 22127RK46C",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-K70U": {
+    "device_id": "1dd885f5a56a498182bdd66201dc82a4",
+    "device_name": "Redmi 2407FRK8EC",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-一加12": {
+    "device_id": "8b210f321e3840e2b78c4829bb586d90",
+    "device_name": "OnePlus PJD110",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-OPPO A5": {
+    "device_id": "e2b79c6db8ff4afaa71a53457e8d5162",
+    "device_name": "OPPO PBAM00",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-ROG8": {
+    "device_id": "0e216911fa8f4f95b524b8879ae05353",
+    "device_name": "asus ASUS_AI2401_A",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Redmi Turbo3": {
+    "device_id": "dbd894dbdc4a42708a31cdd4024c5496",
+    "device_name": "Redmi 24069RA21C",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-小米14P": {
+    "device_id": "95f44c0e26454c2a9f57516b3d0d9437",
+    "device_name": "Xiaomi 23116PN5BC",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-联想拯救者Y700": {
+    "device_id": "6e613abee51244f4b3292c2f4bf32b7e",
+    "device_name": "lenovo Lenovo TB-9707F",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-小米14": {
+    "device_id": "32afa297764a47dd9cdf8208f5c081fa",
+    "device_name": "Xiaomi 23127PN0CC",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-小米15": {
+    "device_id": "6fc54a8b70e64dbfbca22416461183b0",
+    "device_name": "Xiaomi 24129PN74C",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-小米15 Pro": {
+    "device_id": "7b97d24d18f44c8d8dfa15aba94d7dd6",
+    "device_name": "Xiaomi 2410DPN6CC",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-小米15 Ultra": {
+    "device_id": "3cbf6f8a657e4c8d9ff5e26bd587db4d",
+    "device_name": "Xiaomi 25010PN30C",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-小米15S Pro": {
+    "device_id": "f15a5a76201342e7b8542e319c61d872",
+    "device_name": "Xiaomi 25042PN24C",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 16": {
+    "device_id": "cf3f0eb7b51d4c94ac2ce2ee4f858921",
+    "device_name": "Apple iPhone 16",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 16 Pro": {
+    "device_id": "4bb02f71901f43abb23e260d64ef05b0",
+    "device_name": "Apple iPhone 16 Pro",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 16 Pro Max": {
+    "device_id": "0e5df80318fe4fc4a8f1a8d0e0ce23f0",
+    "device_name": "Apple iPhone 16 Pro Max",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 16 Plus": {
+    "device_id": "b641ec6bd32046058f85f8761a047887",
+    "device_name": "Apple iPhone 16 Plus",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-华为Mate XT": {
+    "device_id": "addce7561f1d4ef59a4457fe4d2435c2",
+    "device_name": "huawei GRL-AL10",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-真我GT7P": {
+    "device_id": "0ec12a1956e44266b23b0084a8254e07",
+    "device_name": "realme RMX5010",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-模拟器": {
+    "device_id": "d408c694bc604d33a2a836051ab4031f",
+    "device_name": "tenc gamematrix",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-OPPO Find X8": {
+    "device_id": "f6bf3997d80544ed8d6daca600d2f8b1",
+    "device_name": "OPPO PKB110",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-OPPO Find X8 Pro": {
+    "device_id": "eede49d8036441ec8e67ba91d9a940da",
+    "device_name": "OPPO PKC110",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-1+Pad Pro": {
+    "device_id": "2983a01e283e4d2c88f7103feb69b0c9",
+    "device_name": "oneplus OPD2404",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-ROG8P": {
+    "device_id": "fd7e07e318ea44eb94944cfd8f3d2601",
+    "device_name": "asus ASUS_AI2401_B",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-OPPO X8 Ultra": {
+    "device_id": "bf6da622e044459ba0584a3e3e21fb98",
+    "device_name": "OPPO PKJ110",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-K80 U": {
+    "device_id": "f8c348f22d0e439c9d9b1a5903c03438",
+    "device_name": "Redmi 25060RK16C",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iQOO Neo9": {
+    "device_id": "1ac128b5f5f646759f005a1e67779e48",
+    "device_name": "vivo V2338A",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iQOO 11": {
+    "device_id": "454c36fb84ed4109985d4d160ea6456e",
+    "device_name": "vivo V2243A",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iQOO 12 Pro": {
+    "device_id": "9dab3e251b9841d4b8bce01c9e4ca613",
+    "device_name": "vivo V2329A",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Galaxy S24 Ultra": {
+    "device_id": "ba454950451843e29dab414a55dd2c67",
+    "device_name": "samsung SM-S9280",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 4": {
+    "device_id": "dc49d098eb8a42c88ac10e0a84c46f15",
+    "device_name": "Apple iPhone 4",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 4S": {
+    "device_id": "e90428b275034cb68124b1f9607e4e18",
+    "device_name": "Apple iPhone 4S",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 5": {
+    "device_id": "60de0999058b41d58e22214df0c12e8d",
+    "device_name": "Apple iPhone 5",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 5S": {
+    "device_id": "19e05185ccaf446cb0fc2fc0b63fa8d3",
+    "device_name": "Apple iPhone 5S",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 6": {
+    "device_id": "f6312270052041beb9d717f63ee315ec",
+    "device_name": "Apple iPhone 6",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 6 Plus": {
+    "device_id": "51789c4e21384f9d952faf5037fe656f",
+    "device_name": "Apple iPhone 6 Plus",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 6S": {
+    "device_id": "7211c9a850dc45a9aec368917b2735d0",
+    "device_name": "Apple iPhone 6S",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 6S Plus": {
+    "device_id": "2aaf930ab16b4f33b50a6ffddacafa3f",
+    "device_name": "Apple iPhone 6S Plus",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone SE": {
+    "device_id": "657cd7420bf54e34af44a59bd6ea507e",
+    "device_name": "Apple iPhone SE",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 7": {
+    "device_id": "e783b47e512e402abfac1b8052a0c823",
+    "device_name": "Apple iPhone 7",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 7 Plus": {
+    "device_id": "9caab012d5474d38bd7e18c09fd2dde6",
+    "device_name": "Apple iPhone 7 Plus",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 8": {
+    "device_id": "94325d1dbb78465aaf86f5d2552e871a",
+    "device_name": "Apple iPhone 8",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 8 Plus": {
+    "device_id": "0b1dc7d861dc45ef88f7abb4b202a576",
+    "device_name": "Apple iPhone 8 Plus",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone X": {
+    "device_id": "2f7cef35960d4a3fb9dfb807df602a81",
+    "device_name": "Apple iPhone X",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone XS": {
+    "device_id": "50dc75f08db64f0ab2bd571b44938d8c",
+    "device_name": "Apple iPhone XS",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone XS Max": {
+    "device_id": "9d64f3da54b94519a0a20aa70ddf4d80",
+    "device_name": "Apple iPhone XS Max",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone XR": {
+    "device_id": "6fab0b6a9a8f4da6bd4bb3c18846b142",
+    "device_name": "Apple iPhone XR",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 11": {
+    "device_id": "50f6bf8751de48448bcf034aafe078c2",
+    "device_name": "Apple iPhone 11",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 11 Pro": {
+    "device_id": "daa1992c4ab6422c92243b31f44173bd",
+    "device_name": "Apple iPhone 11 Pro",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 11 Pro Max": {
+    "device_id": "bf738113d69c4be984a300b909f952b0",
+    "device_name": "Apple iPhone 11 Pro Max",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 12 mini": {
+    "device_id": "7eaec5d794cb4af6be69845339d1dc73",
+    "device_name": "Apple iPhone 12 mini",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 12": {
+    "device_id": "cccb52d2d59544adb945e98026cd57a6",
+    "device_name": "Apple iPhone 12",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 12 Pro": {
+    "device_id": "e64b40ad2b414cc9afd90d473c15ff18",
+    "device_name": "Apple iPhone 12 Pro",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 12 Pro Max": {
+    "device_id": "f79959cf83f849758dc4bc42bc48d0f2",
+    "device_name": "Apple iPhone 12 Pro Max",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 13 mini": {
+    "device_id": "e37c9e17ed67407ea3f00381e228af98",
+    "device_name": "Apple iPhone 13 mini",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 13": {
+    "device_id": "1e023559ddbe4543b3b4f7b7fae1ba81",
+    "device_name": "Apple iPhone 13",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 13 Pro": {
+    "device_id": "0742dd96510444aeb46d16ba3fc56f5f",
+    "device_name": "Apple iPhone 13 Pro",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 13 Pro Max": {
+    "device_id": "56a063ee86894c779c9a0127e8c1b485",
+    "device_name": "Apple iPhone 13 Pro Max",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 14": {
+    "device_id": "fcfdad920c174d56bf63b91f68c9f2a8",
+    "device_name": "Apple iPhone 14",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 14 Plus": {
+    "device_id": "4fc9ca53adf04b509f6a23328431e1b4",
+    "device_name": "Apple iPhone 14 Plus",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 14 Pro": {
+    "device_id": "8c1be06506e74f4697c4398cefdf3180",
+    "device_name": "Apple iPhone 14 Pro",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 14 Pro Max": {
+    "device_id": "9acd792727c8489781a8e8c728264b05",
+    "device_name": "Apple iPhone 14 Pro Max",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 15": {
+    "device_id": "f94eefe8add241c58166ef3e091fd597",
+    "device_name": "Apple iPhone 15",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 15 Plus": {
+    "device_id": "b917a3b6ad2c4e1d9a2c765576a284cc",
+    "device_name": "Apple iPhone 15 Plus",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-iPhone 15 Pro": {
+    "device_id": "555c7b81d6984b6f99567bf03a788a09",
+    "device_name": "Apple iPhone 15 Pro",
+    "os_version": "18.0",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "ios",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel": {
+    "device_id": "c3ed5262ecb64ce48d5001d30c9d84d2",
+    "device_name": "Google Pixel",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel XL": {
+    "device_id": "1d4d5ebc18954863b856e1b0ff23b079",
+    "device_name": "Google Pixel XL",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 2": {
+    "device_id": "e756b7016950402ca5f9c26e3bd47865",
+    "device_name": "Google Pixel 2",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 2 XL": {
+    "device_id": "d7f41abd98cd4d868d21a2f4352ec221",
+    "device_name": "Google Pixel 2 XL",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 3": {
+    "device_id": "8f6b1ca0034e481dbf82a00ca55d6c07",
+    "device_name": "Google Pixel 3",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 3 XL": {
+    "device_id": "aba303a3425c41d49bf20edd8e200a46",
+    "device_name": "Google Pixel 3 XL",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 3a": {
+    "device_id": "71bb1c2150504dcb92d5cec2db8b255f",
+    "device_name": "Google Pixel 3a",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 3a XL": {
+    "device_id": "ce9795a0ade04619a452dca9ef8a3f6f",
+    "device_name": "Google Pixel 3a XL",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 4": {
+    "device_id": "618bea1855ec4127afa1587e73714c38",
+    "device_name": "Google Pixel 4",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 4 XL": {
+    "device_id": "e5acbfc69bbd4bf6a9131244e73f192d",
+    "device_name": "Google Pixel 4 XL",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 4a": {
+    "device_id": "50d3ec0720e0418e8a46ca3238cfcd2a",
+    "device_name": "Google Pixel 4a",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 5": {
+    "device_id": "48c9bb936f5645e998f35aaff0fcc5bc",
+    "device_name": "Google Pixel 5",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 6": {
+    "device_id": "b8ef63320b2e4eb99030d7f9379121af",
+    "device_name": "Google Pixel 6",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 6 Pro": {
+    "device_id": "a8bd3f6dab2b4612a9d8184dd1ae72d4",
+    "device_name": "Google Pixel 6 Pro",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 6a": {
+    "device_id": "ab5739e11fbd486780f2e684d7baca54",
+    "device_name": "Google Pixel 6a",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 7": {
+    "device_id": "1cc7989e6024461b971e0d0e52bb8f92",
+    "device_name": "Google Pixel 7",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 7 Pro": {
+    "device_id": "ef7bc39fa3754792a7df4852e6753cc8",
+    "device_name": "Google Pixel 7 Pro",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 7a": {
+    "device_id": "ea1fd83a45a943b1b8bfb0dd124ad3a8",
+    "device_name": "Google Pixel 7a",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 8": {
+    "device_id": "b92a066803b3421e965364418e706901",
+    "device_name": "Google Pixel 8",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 8 Pro": {
+    "device_id": "957f041e6c754fd3b5bd8294c18e2e2c",
+    "device_name": "Google Pixel 8 Pro",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 8a": {
+    "device_id": "c225e3a48125464f9272ef878524e718",
+    "device_name": "Google Pixel 8a",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel Fold": {
+    "device_id": "dba8015b68494b7ebe081083f9a774ee",
+    "device_name": "Google Pixel Fold",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 9": {
+    "device_id": "9f10d1d9fb2c4ebc935b55cfdbb8730d",
+    "device_name": "Google Pixel 9",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 9 Pro": {
+    "device_id": "f0d4f2c4ef7149dea06d4aa2abab8aa0",
+    "device_name": "Google Pixel 9 Pro",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 9 Pro XL": {
+    "device_id": "8b37526f156d455db14c9beef0d47df1",
+    "device_name": "Google Pixel 9 Pro XL",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel 9 Pro Fold": {
+    "device_id": "383cbf0a6d0e44c9b1bcc46fe407c3b8",
+    "device_name": "Google Pixel 9 Pro Fold",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel C": {
+    "device_id": "71c53dd58c8a4bb4bc6efabd4f159b08",
+    "device_name": "Google Pixel C",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  },
+  "guise-Pixel Tablet": {
+    "device_id": "f246a95ded9342008acb8d3d21419787",
+    "device_name": "Google Pixel Tablet",
+    "os_version": "14",
+    "app_install_time": 0,
+    "city": "",
+    "platform": "android",
+    "_note": "guise 模板导入",
+    "_pool": true
+  }
+}

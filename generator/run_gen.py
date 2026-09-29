@@ -28,7 +28,8 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rungen import (RunningGenerator, RunnerProfile, RouteMode,
-                    generate_record, fmt_pace, fmt_duration, parse_pace)
+                    generate_record, fmt_pace, fmt_duration, parse_pace,
+                    SHAPE_ELLIPSE, SHAPE_TRACK)
 
 C_BOLD = "\033[1m"
 C_DIM = "\033[2m"
@@ -292,11 +293,23 @@ def main():
     ap.add_argument("--seed", type=int)
     ap.add_argument("--interval", type=float, default=5.0, help="采样间隔 (秒)")
     ap.add_argument("--noise", type=float, default=1.6, help="GPS 噪声 (米)")
+    # ★★ 轨迹形状（2026-09-29）：ellipse = 圆润闭合环（默认、最稳）；
+    #   track = 标准田径场（两个半圆 + 两条直道），按打卡点外接矩形自适应直道长度。
+    ap.add_argument("--shape", choices=[SHAPE_ELLIPSE, SHAPE_TRACK],
+                    default=SHAPE_ELLIPSE, help="轨迹形状")
+    ap.add_argument("--track-straight", type=float, default=0.0,
+                    help="跑道形状的直道长度（米）；0 = 按打卡点自适应")
     ap.add_argument("--outdir", type=str, default="output")
     ap.add_argument("--config", type=str, help="JSON 配置文件")
     ap.add_argument("--quiet", action="store_true")
 
     a = ap.parse_args()
+
+    # ★★ 跑道直道长度覆盖：`plan_route` 读的是 route 模块级常量，
+    #   命令行给值时就地改掉（0 / 负值 = 保持"按打卡点自适应"）。
+    if getattr(a, "track_straight", 0.0) and a.track_straight > 0:
+        from rungen import route as _route_mod
+        _route_mod.TRACK_STRAIGHT_M = float(a.track_straight)
 
     # ---------- 配置文件 ----------
     if a.config:
@@ -317,6 +330,7 @@ def main():
         a.interval = cfg.get("sample_interval_s", a.interval)
         a.noise = cfg.get("noise_sigma_m", a.noise)
         a.outdir = cfg.get("outdir", a.outdir)
+        a.shape = cfg.get("shape", a.shape)
         for cp in cfg.get("checkpoints", []):
             if isinstance(cp, dict):
                 a.cp.append((cp.get("name", "打卡点"), cp["lat"], cp["lon"],
@@ -345,6 +359,7 @@ def main():
         start=(a.lat, a.lon), distance_km=a.dist, start_time=a.start,
         checkpoints=a.cp, profile=prof, mode=mode, end=end,
         sample_interval_s=a.interval, seed=a.seed, noise_sigma_m=a.noise,
+        shape=a.shape,
     )
     rec = gen.generate()
 
