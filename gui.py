@@ -132,22 +132,72 @@ def do_switch_device(name: str, platform: str) -> dict:
     return {"ok": True, "msg": "已切换到 %s" % name}, False
 
 
-def device_list() -> list:
-    """设备列表：暴露 别名 + 平台 + 认证型号（不泄露 device_id 明文）。"""
-    swcli.seed_devices_from_identity()
+def bound_device(username: str) -> dict:
+    """某账号在 `device_bind.json` 里绑定的设备（未登录 / 未绑定 → `{}`）。
+
+    ★ 2026-09-29：绑定 = 提交时 `load_identity()` **第 0 条**命中的那台，
+      与「界面里选中的」无关 ⇒ 界面必须照它显示，否则就是在骗人。
+    """
+    alias = swcli.get_bind_alias(username or "")
+    if not alias:
+        return {}
+    d = swcli.load_devices().get(alias)
+    if not d:
+        return {"alias": alias, "missing": True, "in_pool": False,
+                "platform": "", "platform_label": "", "model": ""}
+    plat = d.get("platform", "android")
+    return {"alias": alias, "missing": False, "in_pool": True,
+            "platform": plat, "platform_label": PLATFORMS.get(plat, "安卓"),
+            "model": d.get("device_name", "")}
+
+
+def effective_device(c) -> dict:
+    """当前**实际生效**的设备 = 提交时 `load_identity()` 会返回的那台。
+
+    ★★ 2026-09-29 修「界面显示的和实际提交的不是同一台」：
+      旧实现 `snap["device"] = get_active_name()` 读的是 `active_device.txt`，
+      而 `swcli.Client.__init__` 走的是 `load_identity()` —— 已登录时**第 0 条
+      「账号绑定设备」压过 active** ⇒ 界面显示的别名与提交用的 device_id 可以
+      完全不同（实测：界面显示安卓「默认」，提交用的是 `guise-iPhone 6S`）。
+      这里统一用 `c.identity.device_id` **反查别名**，保证「界面 = 实际」。
+    """
     devs = swcli.load_devices()
-    act = swcli.get_active_name()
-    out = []
+    did = getattr(c.identity, "device_id", "") or ""
+    alias = ""
     for name, d in devs.items():
-        out.append({"name": name,
-                    "platform": d.get("platform", "android"),
-                    "platform_label": PLATFORMS.get(d.get("platform", "android"), "安卓"),
-                    "model": d.get("device_name", ""),
-                    "active": name == act})
-    if not out:
-        out.append({"name": _fresh_alias("android"), "platform": "android",
-                    "platform_label": "安卓", "active": True})
-    return out
+        if d.get("device_id") == did:
+            alias = name
+            break
+    plat = getattr(c.identity, "platform", "android")
+    return {"alias": alias, "device_id": did, "in_pool": bool(alias),
+            "model": getattr(c.identity, "device_name", ""),
+            "platform": plat, "platform_label": PLATFORMS.get(plat, "安卓")}
+
+
+def device_list(c=None) -> list:
+    """设备下拉的数据源：**只返回实际生效的那一台**（2026-09-29 改）。
+
+    ★ 用户要求：「设备那里只显示出绑定的设备」。
+      旧实现返回**全部 99 台**，用户能在界面里切来切去 —— 但切了**根本不影响提交**
+      （提交走 `load_identity()` 第 0 条 = 账号绑定设备，见 `effective_device`），
+      只制造「我换过设备了」的错觉。现在只暴露唯一一台，界面不再骗人。
+      ★ 别名反查不到时返回 `[]`（前端显示「本地默认设备」并把 device 传空串）——
+        传空串时 `_do_run_locked` 会跳过 `ensure_device()`，直接用 `load_identity()`
+        的结果，**不会**凭空新建一台设备档案。
+    """
+    if c is None:
+        c = swcli.Client()
+    swcli.seed_devices_from_identity()
+    eff = effective_device(c)
+    if not eff["alias"]:
+        return []
+    uname = c.session.get("username", "")
+    return [{"name": eff["alias"],
+             "platform": eff["platform"],
+             "platform_label": eff["platform_label"],
+             "model": eff["model"],
+             "active": True,
+             "bound": bool(uname) and swcli.get_bind_alias(uname) == eff["alias"]}]
 
 
 def device_info(name: str) -> dict:
@@ -322,7 +372,9 @@ def auto_config() -> dict:
         device = bind_alias
         platform = devs[bind_alias].get("platform", "android")
     else:
-        device = swcli.get_active_name()
+        # ★ 2026-09-29：回退也要用**实际生效**的设备，不能再用 active_device.txt
+        #   （snap["device"] 已是 load_identity() 反查出来的别名）
+        device = snap.get("device", "") or ""
         platform = snap.get("platform", "android")
     return {"ok": True, "dist_km": dist_km, "pace": pace, "start": start,
             "platform": platform, "device": device,
@@ -348,8 +400,7 @@ def do_login(username: str, password: str) -> dict:
         log_write("登录：请先输入手机号和密码", "err")
         return {"ok": False, "msg": "请输入手机号和密码"}
 
-    log_write("登录 %s …（加载加密链 + checkGeeUse，设备=%s）"
-              % (username, swcli.get_active_name() or "默认"))
+    log_write("登录 %s …（加载加密链 + checkGeeUse）" % username)
     def _dep_msg(e):
         miss = getattr(e, "name", None) or str(e)
         return ("缺少登录依赖 %s —— 请在 Termux 里执行："
@@ -395,21 +446,28 @@ def do_login(username: str, password: str) -> dict:
             swcli.save_binds(binds)
     except Exception:
         pass
-    log_write("登录成功：uid=%s name=%s 设备=%s"
+    log_write("登录成功：uid=%s name=%s 绑定设备=%s"
               % (result["uid"], result.get("name", ""),
-                 swcli.get_active_name() or "默认"), "ok")
+                 bound_device(username).get("alias") or "本地默认设备"), "ok")
     return {"ok": True, "msg": "登录成功", "data": result}
 
 
 def get_snapshot() -> dict:
     c = swcli.Client()
+    uname = c.session.get("username", "")
+    eff = effective_device(c)
     snap = {"logged": bool(c.uid and c.token), "uid": c.uid,
             "name": c.session.get("name", ""), "unid": c.session.get("unid", ""),
-            "username": c.session.get("username", ""),
-            "device": swcli.get_active_name(),
+            "username": uname,
+            # ★ 2026-09-29：device 由 `get_active_name()`（active_device.txt）改为
+            #   **实际生效别名**。前者在已登录时会被 `load_identity()` 第 0 条
+            #   （账号绑定设备）压过 ⇒ 界面显示的与提交用的可以不是同一台。
+            "device": eff["alias"],
+            "device_model": eff["model"],
+            "bound": bound_device(uname),
             "platform": c.identity.platform,
             "platform_label": PLATFORMS.get(c.identity.platform, "安卓"),
-            "devices": device_list(),
+            "devices": device_list(c),
             "stats": None, "records": []}
 
     if not snap["logged"]:
@@ -933,9 +991,6 @@ PAGE = r"""<!DOCTYPE html>
     .devdd-opts{max-height:180px}
     .toast{left:12px;right:12px;top:12px;text-align:center}
     .mast .help-btn{font-size:11px;padding:4px 10px}
-    /* 设备选择 + 「＋新设备」：窄屏下各占一行，避免挤压重叠（下拉列表还会盖住按钮） */
-    #devDDBox{flex:1 1 100%!important}
-    #devDDBox~button{flex:1 1 100%!important;margin:6px 0 0!important}
   }
   @media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important}}
 </style>
@@ -1011,27 +1066,17 @@ PAGE = r"""<!DOCTYPE html>
       </div>
     </div>
     <div class="row">
-      <div><label>平台 <span id="platLbl" style="float:right;font-weight:400;color:var(--ac);font-size:11px">跟随设备</span></label>
-        <select id="rPlatform" disabled style="background:var(--bg);color:var(--sub);cursor:not-allowed">
+      <div><label>平台 <span id="platLbl" style="float:right;font-weight:400;color:var(--sub);font-size:11px">账号绑定</span></label>
+        <select id="rPlatform" disabled tabindex="-1"
+                style="background:var(--bg);color:var(--sub);cursor:not-allowed">
           <option value="android">安卓</option>
           <option value="ios">苹果</option>
         </select></div>
-      <div><label>设备 <span id="devIdLbl" style="float:right;font-weight:400;color:var(--sub);font-size:11px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span></label>
-        <div class="row" style="gap:6px">
-          <div class="devdd" id="devDDBox" style="position:relative;flex:1;min-width:0">
-            <div class="devdd-head" id="devDDHead" role="button" tabindex="0" onclick="toggleDevDD(event)">
-              <span id="devDDTxt">选择设备…</span><span class="caret" aria-hidden="true">▾</span>
-            </div>
-            <div class="devdd-list" id="devDDList">
-              <div class="devdd-search">
-                <input id="devSearch" placeholder="搜索设备…" oninput="renderDevList()">
-              </div>
-              <div class="devdd-opts" id="devOpts"></div>
-            </div>
-            <input type="hidden" id="rDevice">
-          </div>
-          <button class="gray small" style="margin:0" onclick="newDevice()">＋新设备</button>
-        </div>
+      <div><label>设备 <span id="devIdLbl" style="float:right;font-weight:400;color:var(--sub);font-size:11px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span></label>
+        <input id="rDeviceView" readonly tabindex="-1"
+               style="background:var(--bg);color:var(--sub);cursor:default"
+               title="由账号绑定决定：首登随机固定一台，之后登录/提交都用它">
+        <input type="hidden" id="rDevice">
       </div>
       <div><label>体重 kg</label><input id="rWeight" type="number" value="65" step="1"></div>
     </div>
@@ -1167,7 +1212,7 @@ function render(){
     : '<b class="no">未登录</b>';
   $("userCard").style.display=logged?"block":"none";
   if(state){
-    // 平台只读跟随设备：由 fillDevices 选中设备后自动同步，不再由 state.platform 覆盖
+    // 设备/平台只读展示：由 fillDevices() 按 state.devices 渲染（= 账号绑定设备）
     fillDevices();
     if(!logged){
       // 未登录：不显示任何默认校区，仅提示登录后自动获取
@@ -1394,94 +1439,36 @@ async function refreshDevId(name){
   }catch(e){}
 }
 
-/* 设备下拉：自定义限高滚动 + 搜索。别名 + 平台徽标，不暴露 device_id；型号在 label 右侧小字 */
+/* ── 设备展示：**只展示账号绑定的那一台**，不可切换（2026-09-29）──────────
+   ★ 为什么不能切换：提交走的是 `swcli.load_identity()` 的**第 0 条** ——
+     `device_bind.json` 里该账号绑定的设备，与「界面里选中的」无关。
+     以前那个 99 台的下拉切了**根本不影响提交**，只制造「我换过设备了」的错觉。
+   ★ 换账号（登录 / 登出）后 `getState()` 会重新拉取 ⇒ 自动换成该账号绑定的设备。 */
 function fillDevices(){
-  const list=(state&&state.devices)||[];
-  const cur=$("rDevice").value;
-  // 优先当前活跃（登录绑定的那台）设备；其次当前平台第一台；最后第一台
-  const target=list.find(d=>d.active)
-    ||(state&&state.device?list.find(d=>d.name===state.device):null)
-    ||list.find(d=>d.platform===$("rPlatform").value)
-    ||list[0];
-  if(target&&target.name!==cur){
-    setDeviceValue(target.name);   // 内部同步平台 + 渲染 + 刷新型号
+  const d=((state&&state.devices)||[])[0];
+  const view=$("rDeviceView"),hid=$("rDevice"),lbl=$("devIdLbl");
+  if(d&&d.name){
+    hid.value=d.name;
+    view.value=dispDevName(d.name);
+    view.title="账号绑定设备："+d.name+(d.bound?"（已绑定）":"");
+    lbl.textContent=d.model?("· "+d.model):"";
+    setPlatFromDevice(d.platform);
   }else{
-    renderDevList();
+    hid.value="";
+    view.value=(state&&state.logged)?"未绑定设备":"本地默认设备";
+    view.title="未查到设备档案：提交时直接用本地身份（不会新建档案）";
+    lbl.textContent="";
+    if(state&&state.platform){setPlatFromDevice(state.platform);}
   }
 }
 
-/* 渲染设备列表（按当前平台过滤 + 关键词搜索） */
-function renderDevList(){
-  const platform=$("rPlatform").value;
-  const list=(state&&state.devices)||[];
-  const kw=($("devSearch").value||"").trim().toLowerCase();
-  let shown=list.filter(d=>d.platform===platform);
-  if(!shown.length)shown=list;          // 该平台无设备时才全放开
-  if(kw)shown=shown.filter(d=>d.name.toLowerCase().indexOf(kw)>=0);
-  const box=$("devOpts");box.innerHTML="";
-  if(!shown.length){
-    const d=document.createElement("div");d.className="dd-none";
-    d.textContent="（无设备，点＋新设备）";box.appendChild(d);return;
-  }
-  const cur=$("rDevice").value;
-  shown.forEach(d=>{
-    const o=document.createElement("div");
-    o.className="dd-opt"+(d.name===cur?" sel":"");
-    o.textContent=(d.active?"已选 ":"")+d.name;
-    o.onclick=()=>setDeviceValue(d.name);
-    box.appendChild(o);
-  });
-}
+/* 别名去掉内部前缀，只给用户看机型名（guise-iPhone 6S → iPhone 6S） */
+function dispDevName(n){return String(n||"").replace(/^guise-/,"");}
 
-/* 选中设备：写入隐藏值 + 头部文本 + 同步平台(跟随设备) + 刷新型号 */
-function setDeviceValue(name){
-  $("rDevice").value=name||"";
-  $("devDDTxt").textContent=name||"选择设备…";
-  closeDevDD();
-  // 平台跟随设备：设备选哪个平台，平台下拉就同步成哪个
-  const dev=(state&&state.devices||[]).find(d=>d.name===name);
-  if(dev&&dev.platform){setPlatFromDevice(dev.platform);}
-  renderDevList();
-  showDevModel();
-}
-
-/* 平台跟随设备：更新只读平台下拉 + 触发配速/设备联动（platform 变了由 fillDevices 兜底） */
+/* 平台只读展示：跟随绑定设备，不响应点击（select 本身已 disabled） */
 function setPlatFromDevice(plat){
   const sel=$("rPlatform");
-  if(sel&&(sel.value!==plat)){
-    sel.value=plat||"android";
-  }
-}
-
-/* 展开/收起自定义下拉 */
-function toggleDevDD(e){
-  e=e||window.event;
-  if(e&&e.stopPropagation)e.stopPropagation();
-  const box=$("devDDBox");
-  const willOpen=!box.classList.contains("open");
-  box.classList.toggle("open",willOpen);
-  if(willOpen){$("devSearch").value="";renderDevList();$("devSearch").focus();}
-}
-function closeDevDD(){const b=$("devDDBox");if(b)b.classList.remove("open");}
-
-/* 点击页面其他区域收起下拉 */
-document.addEventListener("click",e=>{
-  const box=$("devDDBox");
-  if(box&&!box.contains(e.target))closeDevDD();
-});
-
-/* 选中设备后：label 右侧显示认证型号（device_name，如 Xiaomi 22081212C） */
-async function showDevModel(){
-  const name=$("rDevice").value;
-  const el=$("devIdLbl");
-  if(!name){el.textContent="";return;}
-  el.textContent="型号查询中…";
-  try{
-    const res=await api("/api/device-info?name="+encodeURIComponent(name));
-    if(res.ok){
-      el.textContent="· "+(res.model||"未知型号");
-    }else{el.textContent="";}
-  }catch(e){el.textContent="";}
+  if(sel&&plat){sel.value=plat;}
 }
 
 async function doLogin(){
@@ -1518,15 +1505,6 @@ async function doLogout(){
 }
 
 async function refresh(){await getState();toast("已刷新");}
-
-async function newDevice(){
-  const platform=$("rPlatform").value;
-  const res=await api("/api/new-device",{platform});
-  if(res.ok){
-    toast("已新建设备："+res.name);
-    await getState();
-  }else{toast("新建失败");}
-}
 
 async function randomTime(){
   const dist=parseFloat($("rDist").value)||2.15;
@@ -1729,19 +1707,10 @@ async function autoConfig(){
     if(res.dist_km){$("rDist").value=res.dist_km;}
     if(res.pace){setPaceSelect(res.pace);}
     if(res.start){setStartInput(res.start);}
-    // 推荐设备（账号绑定设备优先）→ 选中后平台自动跟随设备
-    if(res.device){
-      const devs=(state&&state.devices)||[];
-      if(devs.some(d=>d.name===res.device)){
-        setDeviceValue(res.device);
-      }else{
-        // 推荐设备不在列表（异常情况）：按平台兜底
-        if(res.platform){$("rPlatform").value=res.platform;}
-        fillDevices();
-      }
-    }else{
-      fillDevices();
-    }
+    // 推荐设备（账号绑定设备优先）→ 平台自动跟随绑定设备
+    // ★ 2026-09-29：设备已改为**只读展示绑定设备**，不再「选中」——
+    //   这里只做兜底刷新，真正的设备由 fillDevices() 按 state.devices 渲染。
+    fillDevices();
     hint.innerHTML='已按历史平均生成：距离 <b>'+res.dist_km+' km</b> · 配速 <b>'+res.pace
       +'</b> · 起跑 <b>'+res.start+'</b> · 平台 '+res.platform_label
       +' &nbsp;<span style="color:var(--sub)">'+res.note+'</span>'
