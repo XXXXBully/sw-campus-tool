@@ -907,10 +907,16 @@ def cmd_submit(args):
     unid = args.unid or int(c.session.get("unid", 0) or 0)
 
     # 0) 双模式自动生成轨迹
-    # ★ 记录 address 的来源：**校区城市** > 设备档案 city。
+    # ★ 记录 address 的来源：`--address` > **校区城市** > 设备档案 city。
     #   ⚠ 2026-09-28 定因：旧实现只取 `c.identity.city`，而发布包为隐私脱敏把它
     #     统一写成「大连市」（_gh_tools/clean_release.py）⇒ 不管在哪跑都显示大连市。
     #     地址该由校区决定（真机 App 也是城市级反地理编码）。
+    #   ⚠ 2026-09-29 补漏：修复只写在「swcli 自己解析校区」那条分支里，而
+    #     GUI(`gui.py`) / 批量(`run_all.py`) 都显式传 `--campus-lat/--campus-lon`
+    #     ⇒ 走的是另一条分支 ⇒ 地址照样退回「大连市」（A/B 实证：不传坐标得
+    #     揭阳市、传坐标得空）。现收敛到 `campus.resolve_address()` 单一实现。
+    #   ↓ 这里只是「手动轨迹 / 非 free|score」路径的初值，走模式生成时会被上面的
+    #     单一实现覆盖。
     record_address = str(getattr(args, "address", None)
                          or getattr(c.identity, "city", "") or "")
     if mode in ("free", "score") and not track_path:
@@ -920,8 +926,14 @@ def cmd_submit(args):
         # 校区中心：优先命令行 > 本地覆盖/服务端围栏/内置库；无坐标不再回退默认
         if args.campus_lat is not None and args.campus_lon is not None:
             clat, clon = float(args.campus_lat), float(args.campus_lon)
+            # ★★ 2026-09-29 修：这条分支也必须给出**校区城市**。
+            #   GUI（`gui.py`）与批量（`run_all.py`）都是**显式传坐标**的 ——
+            #   原先这里把 city 置空 ⇒ `record_address` 退回设备档案 city，
+            #   而发布包为脱敏把它统一写成「大连市」⇒ 记录地址恒为大连市。
+            #   （A/B 实证：不传坐标 → 揭阳市 ✅；显式传坐标 → 空 ❌）
+            #   ⇒ 用 unid 反查校区城市，让「地址由校区决定」在**所有**入口成立。
             camp = {"name": "命令行指定", "lat": clat, "lon": clon,
-                    "unid": unid, "city": ""}
+                    "unid": unid, "city": campus.known_city(unid)}
         else:
             camp = campus.pick_campus(c, unid)
             if camp.get("lat") is None or camp.get("lon") is None:
@@ -931,10 +943,13 @@ def cmd_submit(args):
                 return 2
             clat, clon = camp["lat"], camp["lon"]
             unid = int(camp.get("unid") or unid or 0)
-        # 地址取**校区城市**（命令行/覆盖配置/内置表），取不到才保留档案 city
-        if camp.get("city"):
-            record_address = str(camp["city"])
-        print("  [地址] address=%s（来源：校区）" % (record_address or "<空>"))
+        # 地址裁决**只有一处**（`campus.resolve_address`）—— 见该函数的注释：
+        # 优先级 `--address` > 校区城市 > 设备档案 city。别再在这里就地判断。
+        record_address, _addr_src = campus.resolve_address(
+            getattr(c.identity, "city", "") or "", unid,
+            explicit=getattr(args, "address", None),
+            campus_city=camp.get("city"))
+        print("  [地址] address=%s（来源：%s）" % (record_address or "<空>", _addr_src))
         try:
             prep = swmode.prepare(c, mode, args.dist, campus_lat=clat,
                                   campus_lon=clon, unid=unid,

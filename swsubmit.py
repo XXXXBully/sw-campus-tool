@@ -574,7 +574,21 @@ def build_record_body(track: dict, *, uid: int, unid: int, policy: int,
 
     run_uuid = str(uuid.uuid4()).upper()
     dis_ceil = math.ceil(total_dis_i * 100.0) / 100.0
-    speed = int(round_to(total_time / dis_ceil * 50.0 / 3.0, 2) * 1024.0) if dis_ceil else 0
+    # ★★★ 2026-09-29 修正：`speed` 字段 = **毫-分/公里**（×1000），不是 ×1024。
+    #   现象（用户报告）：「跑步数据总览」的平均配速 与 「配速（分/公里）」图的平均配速 对不上。
+    #   真机截图实证（记录 1327343591，11:47 / 2.09km）：
+    #       总览 平均配速 = 5'47"   ← 来自本字段
+    #       配速图 平均配速 = 5'38"  ← App 自己按 距离/时间 算，是对的
+    #   5'47" / 5'38.3" = 1.0240 —— 正是 1024/1000 这个比例。
+    #   根因：旧实现写 `round(pace_min, 2) * 1024`，而**服务端把该字段当「毫-分/公里」读**
+    #     （÷1000），于是显示值恒为真实配速的 1.024 倍（5'40" 显示成 5'48"，慢 8 秒）。
+    #   证据（6 条历史记录，逐条可复现）：服务端返回的 `speed` 恰好 == 我们提交的整数 / 1000，
+    #     例：提交 5806 → 返回 5.806；提交 6021 → 返回 6.021。6/6 精确吻合，不是巧合。
+    #   ★ 1024 的出处：`NekoSportsWorldTool` 的 Rust 源码（`round(...)*1024`），
+    #     我们当初「从源码确认、尚未实测」就照抄了 —— 属于典型的「没实测的二手结论」。
+    #   ★ 精度：改成对「毫」取整（等价于把 pace_min 保留 3 位小数），
+    #     比旧的 `round(...,2)` 更准，且避免 `int(x*1000)` 的浮点截断（5.667*1000=5666.999…）。
+    speed = int(round(total_time / dis_ceil * 50.0 / 3.0 * 1000.0)) if dis_ceil else 0
     avg_step_freq = max(1, int(round_to(total_steps / total_time * 60.0, 0))) if (total_time and total_steps) else 0
 
     body = {

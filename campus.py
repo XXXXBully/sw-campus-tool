@@ -152,6 +152,89 @@ def _known_city(unid: int, overrides: dict | None = None) -> str:
     return str(k.get("city") or "")
 
 
+# ★★ 公开入口（2026-09-29 新增）。
+#   起因：`swcli.py` 在「调用方显式传 --campus-lat/--campus-lon」的分支里把
+#   `camp["city"]` 置空，于是 `record_address` 退回**设备档案 city**；而发布包
+#   为隐私脱敏把它统一写成「大连市」⇒ 从 GUI / run_all 提交的记录全显示大连市。
+#   GUI（`gui.py`）与批量（`run_all.py`）**正是**显式传坐标的那条路 ⇒ 修复形同虚设。
+#   现在这条分支也用 unid 反查校区城市，保证「地址由校区决定」在**所有**入口成立。
+def known_city(unid: int, overrides: dict | None = None) -> str:
+    """公开别名：某 unid 的校区城市名（本地覆盖配置 > 内置已知校区），取不到 ""。"""
+    return _known_city(unid, overrides)
+
+
+# ══════════════════════════════════════════════════════════════════
+# 记录 address 的**唯一裁决处**
+# ══════════════════════════════════════════════════════════════════
+def resolve_address(identity_city: str, unid: int, *,
+                    explicit: str | None = None,
+                    campus_city: str | None = None) -> tuple:
+    """裁决记录 `address`。返回 `(address, source)`。
+
+    优先级：`--address` 显式 > 校区城市 > 设备档案 city。
+
+    ★★ 为什么要有这个函数（2026-09-29 定因）：
+      地址本该由**校区**决定，但「取校区城市」原先只写在 `swcli.py` 的
+      「swcli 自己解析校区」那条分支里；而 **GUI（`gui.py`）与批量（`run_all.py`）
+      都是显式传 `--campus-lat/--campus-lon` 的** —— 走的是另一条分支，
+      那条分支把 `camp["city"]` 置空 ⇒ 退回**设备档案 city**，
+      而发布包为隐私脱敏把它统一写成「大连市」⇒ 从 GUI 提交的记录全显示大连市。
+      ⇒ 凡是「同一语义散落在多个分支」的写法，迟早有一条被漏掉。
+      现在收敛到这一个函数，`swcli.py` 只调用、不再自己判断。
+
+    `campus_city`：调用方已经解析出的校区城市（可为空，函数内部会按 unid 反查）。
+    """
+    if explicit:
+        return str(explicit), "命令行 --address"
+    city = str(campus_city or "").strip() or known_city(unid)
+    if city:
+        return city, "校区"
+    return str(identity_city or ""), "设备档案（该 unid 未收录城市，建议在 campus.json 补 city）"
+
+
+def selftest() -> bool:
+    """回归自检 —— 盯的就是「地址由校区决定」这条规则的所有入口。"""
+    ok = True
+
+    def chk(cond, msg):
+        nonlocal ok
+        print("  %s %s" % ("OK  " if cond else "FAIL", msg))
+        ok = ok and bool(cond)
+
+    chk(known_city(3305) == "揭阳市", "known_city(3305) == 揭阳市")
+
+    # ★ 回归：显式传坐标那条路（GUI / run_all）**也必须**拿到校区城市。
+    #   曾经的 bug：该分支把 city 置空 ⇒ 退回设备档案（发布包 = 大连市）。
+    a, s = resolve_address("大连市", 3305)
+    chk(a == "揭阳市" and s == "校区",
+        "显式坐标路径 → 揭阳市（不是设备档案的 大连市）  实得 %r/%s" % (a, s))
+
+    # 调用方已解析出校区城市时，直接用
+    a, s = resolve_address("大连市", 3305, campus_city="汕头市")
+    chk(a == "汕头市", "调用方给的 campus_city 优先于反查  实得 %r" % a)
+
+    # --address 优先级最高
+    a, s = resolve_address("大连市", 3305, explicit="北京市", campus_city="汕头市")
+    chk(a == "北京市" and "address" in s, "--address 覆盖一切  实得 %r/%s" % (a, s))
+
+    # 未知 unid 才允许退回设备档案（并如实标注来源）
+    a, s = resolve_address("大连市", 0)
+    chk(a == "大连市" and "设备档案" in s, "未知 unid → 退回设备档案  实得 %r/%s" % (a, s))
+
+    # 全空 → 空串（不编造）
+    a, s = resolve_address("", 0)
+    chk(a == "", "无任何来源 → 空串  实得 %r" % a)
+
+    print("  %s 汇总: %s" % ("OK  " if ok else "FAIL", "全部通过" if ok else "存在失败"))
+    return ok
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.exit(0 if selftest() else 1)
+
+
+
 def fetch_fence_center(c, *, verbose: bool = True):
     """从 getGeoFenceForRun 拉取围栏中心坐标。
 
