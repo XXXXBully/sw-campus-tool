@@ -89,7 +89,8 @@ def signature(values: dict, has_room_id: bool = False) -> str:
 # ══════════════════════════════════════════════════════════════════
 # 五点（服务端打卡点 → 提交 body 的 fivePointJson wrapper 串）
 # ══════════════════════════════════════════════════════════════════
-def five_point_payload(points: list, start_ms: int) -> list:
+def five_point_payload(points: list, start_ms: int,
+                       real_keys: bool = False) -> list:
     """五点实体（跑完态 isPass=true）。
 
     ★★★ 2026-09-28 真机 ground truth（5 条真机记录逐一比对，务必读）★★★
@@ -109,6 +110,28 @@ def five_point_payload(points: list, start_ms: int) -> list:
 
     glat/glon 优先用服务端下发的 GCJ 坐标（存在时），否则用 lat/lon 转；
     pointName/isFixed/radius 原样带；position 固定 999（跑完态不在途）。
+
+    ★★★ `real_keys=True`：写真机「记录侧」键集（**OBS 专用**）★★★
+      2026-09-29 真机 ground truth 定因（`_gh_tools/fixtures/obs_backup_1323338948.json`）：
+        真机 App 自己写的记录里，`fivePointJson` 每个元素是
+            {flag, glat, glon, id, isFixed, isPass, lat, lng, pointName,
+             position, state}          ← **没有 `radius`**
+        且 **`isFixed` 全为 0**、`pointName` 全空、`isPass=true`、`position=999`、
+        `state=0`。
+
+      ⇒ 详情页「✓ 打卡点」的**颜色规则**是「必经点画成橙黄、普通点画绿底」
+        （见 `swcli.py` 计分跑 policy 注释）。我们旧版把服务端下发的
+        「必经点」标记 `isFixed=1` 原样写进 OBS ⇒ 详情页凭空多出一个**橙点**，
+        而真机记录**永远没有橙点** ⇒ 一眼就能看出是伪造的。
+
+      ⇒ 所以 OBS 侧一律走 `real_keys=True`（`swobs.five_point_json` 已改）；
+        **提交 body**（`five_point_wrapper`）仍保留原样 —— 服务端判定
+        「经过必经点位」用的是它自己那份下发记录，不依赖我们回传的 isFixed。
+        真机实证：1327096231 被 `_gh_tools/obs_five_fix.py --mode clean` 清成
+        `isFixed` 全 0 后，6 项 `reasonList.completeStatus` 仍全 = 1。
+
+      ★ 别把「必经点必须命中」的**内部校验**也一起删掉：`swmode.fixed_points()`
+        仍按 `isFixed==1` 找必经点，那是数据层的事，与展示层无关。
     """
     out = []
     for i, p in enumerate(points):
@@ -123,7 +146,7 @@ def five_point_payload(points: list, start_ms: int) -> list:
                 glat, glon = swobs.wgs84_to_gcj02(lat, lon)
             except Exception:
                 glat, glon = lat, lon
-        out.append({
+        e = {
             "flag": start_ms,
             "glat": round_to(glat, 7),
             "glon": round_to(glon, 7),
@@ -135,9 +158,15 @@ def five_point_payload(points: list, start_ms: int) -> list:
             "lng": round_to(lon, 7),
             "pointName": p.get("pointName", "") or "",
             "position": 999,
-            "radius": float(p.get("radius", 0) or 0),
             "state": 0,
-        })
+        }
+        if real_keys:
+            # 真机记录侧键集：无 radius / isFixed=0 / pointName 空
+            e["isFixed"] = 0
+            e["pointName"] = ""
+        else:
+            e["radius"] = float(p.get("radius", 0) or 0)
+        out.append(e)
     return out
 
 

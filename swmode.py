@@ -667,9 +667,40 @@ def _track_gcj(pts: list) -> list:
 #   （旧实现是「先留口、再校验」，逼得 gap 只能 < 20m，两个图钉挤在一起分不开。）
 LOOP_TAIL_GAP_M = 50.0
 
+# ★★★ 2026-09-29：留口距离的**上限** —— 用来让「终」也躲开打卡点 ★★★
+#   问题：`_pick_anchor` 只保证了「起」距最近打卡点 ≥ `ANCHOR_MIN_CLEAR_M`，
+#     没管「终」。而「终」= 闭环末点沿路径回退 `LOOP_TAIL_GAP_M` 米的位置。
+#     本校区 5 个打卡点绕一圈 400m ⇒ 相邻两点弧长中位 ≈ 71m、半弧 ≈ 36m，
+#     回退 50m **恰好越过**一个打卡点 ⇒ 末点落在它旁边（实测线上记录
+#     1327754912 10.79m / 1327712193 8.32m / 1327343591 6.64m）
+#     ⇒ 详情页「终」图钉把那个打卡点**完全遮住**，肉眼只数得到 4 个点。
+#   ⇒ `open_loop_tail` 增加 `clear_points`：在 [LOOP_TAIL_GAP_M, 本上限]
+#     区间里扫一个「末点离最近打卡点最远」的回退距离。
+#     ★ 只在**上限以内变长**（不会变短）⇒ 只要 `prepare()` 按上限做留口补偿，
+#       最终里程就恒 ≥ 目标值，绝不会掉到服务端 minDistance 之下。
+#     ★ 上限取 110m 有真机依据：真机记录的自然 gap 是 118.83m / 2159m（≈5.5%）。
+LOOP_TAIL_GAP_MAX_M = 110.0
+
+
+def _point_at_dist(pts: list, seg: list, dist: float):
+    """返回折线上累积里程 = dist 处的 (lat, lon)（线性插值）。"""
+    if not pts or not seg:
+        return None
+    if dist <= 0:
+        return (pts[0]["lat"], pts[0]["lon"])
+    if dist >= seg[-1]:
+        return (pts[-1]["lat"], pts[-1]["lon"])
+    k = 1
+    while k < len(pts) - 1 and seg[k] < dist:
+        k += 1
+    span = seg[k] - seg[k - 1]
+    f = 0.0 if span <= 0 else (dist - seg[k - 1]) / span
+    return (float(pts[k - 1]["lat"]) + (float(pts[k]["lat"]) - float(pts[k - 1]["lat"])) * f,
+            float(pts[k - 1]["lon"]) + (float(pts[k]["lon"]) - float(pts[k - 1]["lon"])) * f)
+
 
 def open_loop_tail(path: str, gap_m: float = LOOP_TAIL_GAP_M,
-                   verbose: bool = True) -> dict:
+                   clear_points: list = None, verbose: bool = True) -> dict:
     """**确保**闭环首末相距至少 `gap_m` 米（把末点沿路径回退）。
 
     语义是 `ensure(gap >= gap_m)` —— **不是**「小于某值才动」：
@@ -682,6 +713,13 @@ def open_loop_tail(path: str, gap_m: float = LOOP_TAIL_GAP_M,
       ⇒ 详情页两个图钉仍然挤在一起分不开（= 白改）。
 
     返回 {"before_m","after_m","dropped","points"}；轨迹 JSON 就地改写。
+
+    clear_points：**WGS-84** 的打卡点列表（计分跑传 `to_wgs_points(pts)`）。
+      给了它 ⇒ 回退距离会在 `[gap_m, LOOP_TAIL_GAP_MAX_M]` 里挑一个让
+      **末点（= 详情页「终」）离最近打卡点最远**的值（≥ `ANCHOR_MIN_CLEAR_M`
+      才采纳）—— 否则「终」图钉会把某个打卡点完全遮住，肉眼像少打了一个点。
+      ★ 只往**长**里挑 ⇒ 配合 `prepare()` 按上限做的留口补偿，最终里程恒 ≥ 目标。
+      ★ 自由跑没有打卡点，传 None 即可（行为与旧版完全一致）。
     """
     t = json.load(open(path, encoding="utf-8"))
     pts = t.get("points") or []
@@ -700,6 +738,40 @@ def open_loop_tail(path: str, gap_m: float = LOOP_TAIL_GAP_M,
     for i in range(1, len(pts)):
         seg[i] = seg[i - 1] + haversine(pts[i - 1]["lat"], pts[i - 1]["lon"],
                                         pts[i]["lat"], pts[i]["lon"])
+
+    # ★★ 让「终」也躲开打卡点（2026-09-29）：在 [gap_m, LOOP_TAIL_GAP_MAX_M]
+    #    区间里扫一个「末点离最近打卡点最远」的回退距离。
+    #    ★ clear_points 必须是 **WGS-84**（与轨迹同一坐标系）——
+    #      服务端下发的 lat/lon 是 BD-09，直接比会偏 ~1194m ⇒ 判据全废。
+    if clear_points:
+        cand = [c for c in clear_points if "lat" in c and "lon" in c]
+        if cand:
+            def _clear(pp):
+                if pp is None:
+                    return -1.0
+                return min(haversine(pp[0], pp[1], q["lat"], q["lon"])
+                           for q in cand)
+
+            cur_d = _clear(_point_at_dist(pts, seg, seg[-1] - gap_m))
+            best_g, best_d = gap_m, cur_d
+            g = gap_m + 5.0
+            while g <= LOOP_TAIL_GAP_MAX_M + 1e-9:
+                d = _clear(_point_at_dist(pts, seg, seg[-1] - g))
+                if d > best_d + 1e-6:
+                    best_d, best_g = d, g
+                g += 5.0
+            if best_g > gap_m and best_d >= ANCHOR_MIN_CLEAR_M:
+                if verbose:
+                    print("  [留口] 终距最近打卡点 %.1fm(<%.0fm) ⇒ 回退 %.0fm→%.0fm"
+                          "（终距最近打卡点 %.1fm）"
+                          % (cur_d, ANCHOR_MIN_CLEAR_M, gap_m, best_g, best_d))
+                gap_m = best_g
+            elif verbose and cur_d < ANCHOR_MIN_CLEAR_M:
+                print("  [留口] ⚠ 扫遍 %.0f~%.0fm 仍找不到让「终」离打卡点"
+                      "≥%.0fm 的回退距离（当前 %.1fm）"
+                      % (LOOP_TAIL_GAP_M, LOOP_TAIL_GAP_MAX_M,
+                         ANCHOR_MIN_CLEAR_M, best_d))
+
     target = seg[-1] - gap_m
     if target <= 0:
         # 轨迹总长比 gap_m 还短：只留首末两点（尽力而为）
@@ -849,10 +921,14 @@ def prepare(c, mode: str, dist_km: float, *, campus_lat: float = None,
     #    ⇒ 生成时先把这段补回来，保证「请求 2.0km 就真的交 2.0km」。
     #    不补的后果：请求 2.0km 实得 1.95km，可能撞上服务端最小距离（2000m）而提交失败。
     #    距离与时长同源（都从轨迹算），所以补距离后时长自动一致，不需要单独补。
-    gen_km = dist_km + LOOP_TAIL_GAP_M / 1000.0
-    if verbose and LOOP_TAIL_GAP_M:
+    #  ★ 2026-09-29：计分跑按【上限】补 —— 因为 `open_loop_tail` 现在会在
+    #    [LOOP_TAIL_GAP_M, LOOP_TAIL_GAP_MAX_M] 里挑一个「让终躲开打卡点」的
+    #    回退距离，实际回退 ≤ 上限 ⇒ 最终里程恒 ≥ 目标值（绝不会短于 minDistance）。
+    gap_budget = (LOOP_TAIL_GAP_MAX_M if mode == "score" else LOOP_TAIL_GAP_M)
+    gen_km = dist_km + gap_budget / 1000.0
+    if verbose and gap_budget:
         print("  [留口补偿] 目标 %.3fkm + 留口 %.0fm ⇒ 生成 %.3fkm"
-              % (dist_km, LOOP_TAIL_GAP_M, gen_km))
+              % (dist_km, gap_budget, gen_km))
 
     if mode == "free":
         if campus_lat is None or campus_lon is None:
@@ -904,7 +980,9 @@ def prepare(c, mode: str, dist_km: float, *, campus_lat: float = None,
         print("  [校验] 必经点命中 & 闭合性")
     # ★ 顺序：先校验**完整闭环**（20m 严阈值），再留口（展示层修饰）
     rep = verify_track(res["track"], pts, verbose=verbose)
-    open_loop_tail(res["track"], verbose=verbose)
+    # ★ 传 WGS-84 打卡点（与轨迹同坐标系），让「终」也躲开打卡点
+    open_loop_tail(res["track"], clear_points=to_wgs_points(pts),
+                   verbose=verbose)
     if not rep["ok"]:
         res["warn"] = (res["warn"] or "") + " [轨迹未完全通过必经点/未闭合]"
     return res

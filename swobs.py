@@ -448,7 +448,8 @@ def build_laps(points: list, start_ms: int) -> list:
     return laps
 
 
-def five_point_payload(points: list, start_ms: int) -> list:
+def five_point_payload(points: list, start_ms: int,
+                       real_keys: bool = False) -> list:
     """五点实体（跑完态 isPass=true）。
 
     ★★ 只接受【服务端下发的打卡点】，绝不接受轨迹点 ★★
@@ -465,7 +466,7 @@ def five_point_payload(points: list, start_ms: int) -> list:
     if not points:
         return []
     import swsubmit
-    return swsubmit.five_point_payload(points, start_ms)
+    return swsubmit.five_point_payload(points, start_ms, real_keys=real_keys)
 
 
 def five_points_list(points: list, start_ms: int) -> list:
@@ -497,8 +498,18 @@ def five_point_json(points: list, start_ms: int) -> str:
 
     ★★ OBS 的 `fixed_point_json.fivePointJson` 就用这个 ——真机定因见
       `five_points_list()` 的 docstring（Bean 字段是 String）。
+
+    ★★★ 2026-09-29：这里**必须**走 `real_keys=True`（真机记录侧键集）★★★
+      真机 App 自己写的记录（fixture `obs_backup_1323338948.json`）里：
+        · 键 = flag/glat/glon/id/isFixed/isPass/lat/lng/pointName/position/state
+          —— **没有 `radius`**
+        · **`isFixed` 全 0**、`pointName` 全空
+      而详情页「✓ 打卡点」是「必经点画橙黄、普通点画绿底」（见 swcli.py 的
+      policy 注释）⇒ 旧版把服务端的 `isFixed=1` 带进 OBS，详情页就多一个**橙点**，
+      真机记录永远没有 ⇒ 肉眼可辨。
+      ⇒ OBS 一律写真机键集；提交 body 侧（`swsubmit.five_point_wrapper`）不动。
     """
-    return json.dumps(five_point_payload(points, start_ms),
+    return json.dumps(five_point_payload(points, start_ms, real_keys=True),
                       separators=(",", ":"), ensure_ascii=False)
 
 
@@ -842,18 +853,38 @@ def selftest() -> bool:
     fx2 = json.loads(_gz.decompress(
         base64.b64decode(obj2["fixed_point_json"])).decode("utf-8"))
     five2 = json.loads(fx2["fivePointJson"])             # ★ 值是 str，内容才是数组
+    #   ★ 2026-09-29 真机 ground truth 定因：**OBS 侧必须写真机键集** ——
+    #     `isFixed` 全 0、`pointName` 全空、**没有 `radius`**
+    #     （真机 App 自己写的记录：fixture obs_backup_1323338948/1323338294/1323356363
+    #      三条全是 five==allLoc、无 radius、isFixed 全 0 ⇒ 详情页全绿、永无橙点）。
+    #     我们旧版把服务端的 `isFixed=1`（必经点）原样写进去 ⇒ 详情页凭空多一个
+    #     **橙点**（规则：必经点画橙黄 / 普通点画绿底）⇒ 一眼可辨是伪造。
+    #     这里**反向注入**守住它：必须 isFixed 全 0、pointName 全空、radius 不在。
     good2 = (isinstance(fx2["fivePointJson"], str)
-             and len(five2) == 2 and five2[0]["pointName"] == "一号点"
-             and five2[0]["isFixed"] == 1 and "lng" in five2[0]
+             and len(five2) == 2
+             and all(p["isFixed"] == 0 for p in five2)
+             and all(p["pointName"] == "" for p in five2)
+             and "radius" not in five2[0]
+             and "lng" in five2[0]
              and "lon" not in five2[0])
     #   ★ 2026-09-28 真机定因：记录侧 `fivePointJson` 的经度字段名是 **`lng`**
     #     （不是服务端打卡点接口的 `lon`）。写成 `lon` ⇒ Bean 读 `lng` 得 0
     #     ⇒ 每个打卡点被画到 (lat, 0)（屏幕外）⇒ 详情页一个 ✓ 都不出现。
     #     这里**反向注入**守住它：必须 `lng` 在、`lon` 不在。
     print("  [计分跑] fixed_point_json 点位数=%d (期望 2)" % len(five2))
-    print("  %s 计分跑五点 = 真实打卡点（字符串 + pointName/isFixed/lng 正确）"
+    print("  %s 计分跑五点 = 真机键集（字符串 + isFixed 全 0 / pointName 空 / 无 radius / 用 lng）"
           % ("OK " if good2 else "FAIL"))
     ok &= good2
+
+    # ★ 非空转证明：body 侧（real_keys=False）必须**仍保留** isFixed=1 /
+    #   pointName / radius —— 若两边都变 0，说明 real_keys 开关压根没生效
+    #   （判据空转，等于没测）。body 不能动：服务端那条链路要原样。
+    body2 = five_point_payload(cps, 1789534834000)
+    c_sw = (body2[0]["isFixed"] == 1 and body2[0]["pointName"] == "一号点"
+            and "radius" in body2[0])
+    print("  %s 非空转：body 侧仍保留 isFixed=1 / pointName / radius（开关真生效）"
+          % ("OK " if c_sw else "FAIL"))
+    ok &= c_sw
 
     # ★ 变异自检：five_points_list → list，five_point_json → str，必须可区分
     c_f5b = (isinstance(five_points_list(cps, 1789534834000), list)
