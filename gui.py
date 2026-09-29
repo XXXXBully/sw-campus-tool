@@ -550,6 +550,13 @@ def _do_run_locked(mode, dist, start, device, pace, weight, force, platform,
         cli += ["--start", start]
     if force:
         cli += ["--force"]
+    # ★★ 计分跑：每次提交都重新抽样打卡点组合（2026-09-29）
+    #   服务端每次返回的 5 点是「6 选 5」随机剔 1 个（离请求坐标最近的必含），
+    #   但 `swmode.load_cache` 的 TTL 是 30 分钟 —— 不强制重拉的话，短时间内连点
+    #   几次「开始跑步」会**复用同一组 5 点**（用户要求「不用一直固定一个组合」）。
+    #   ★ 限流时 swcli 会阻止提交并给出提示（服务端 5 分钟最多 3 次）。
+    if mode == "score":
+        cli += ["--force-points"]
 
     try:
         existing = run_all.fetch_existing_records(verbose=False)

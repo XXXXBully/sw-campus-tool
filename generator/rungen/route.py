@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import os
 import random
 from typing import List, Tuple, Optional, Sequence
 
@@ -49,6 +50,15 @@ class RouteMode:
 #       旧 23.19 m  →  新 3.81 m（其中下游 ~3.5 m 是 14.6 m 采样栅格的弦切伪影）
 #   1.2 m 的幅度经下游重采样后对带厚只贡献 ~0.05 m，仅用于避免各圈逐字节相同。
 LAP_LATERAL_M = 1.2
+
+
+# ★★ 打卡点顶点的「微小偏移」上限（米）—— 2026-09-29
+#   轨迹顶点原本直接取打卡点原坐标 ⇒ 每次都**精确穿过圆心**（实测 0.18 m），
+#   比真实跑步"完美"太多（真实跑者穿过 15 m 判定圆时通常偏几米，不会次次命中圆心）。
+#   加 ≤ 该值的随机偏移后，每次穿过位置都不同；幅度必须**远小于**打卡半径（15 m），
+#   否则会撞上 App 的命中判定，以及 `swmode.verify_track` 的 max(radius, 20) 阈值。
+#   可用环境变量 `RGEN_POINT_JITTER_M` 覆盖（A/B 对照、或临时关成 0）。
+POINT_JITTER_M = float(os.environ.get("RGEN_POINT_JITTER_M", "3.5"))
 
 
 # ============================================================
@@ -156,6 +166,32 @@ def scale_to_length(path: Sequence[Tuple[float, float]],
     return _to_ll(la0, lo0, xy)
 
 
+def _jitter_points(ring: Sequence[Tuple[float, float]],
+                   rng: random.Random,
+                   jitter_m: float = None,
+                   ) -> List[Tuple[float, float]]:
+    """给环上的**打卡点顶点**加半径内的随机小偏移（首个顶点 = 起点，保持不动）。
+
+    ★ 为什么：顶点原本直接取打卡点原坐标 ⇒ 每次都**精确穿过圆心**（实测 0.18 m），
+      真实跑步不会这么准。加偏移后每次穿过位置都不同，观感自然，
+      但仍远小于 App 的打卡半径（15 m）。
+
+    偏移半径取 `jitter_m * sqrt(u)` 而不是 `jitter_m * u` —— 后者会让点挤在
+      圆心附近（圆内面积 ∝ r²，要面积均匀就得按 sqrt 分布）。
+    """
+    ring = list(ring)
+    if jitter_m is None:                      # 运行时读模块常量，便于 A/B 对照
+        jitter_m = POINT_JITTER_M
+    if jitter_m <= 0 or len(ring) < 2:
+        return ring
+    out = [ring[0]]
+    for la, lo in ring[1:]:
+        brg = rng.uniform(0.0, 360.0)
+        r = jitter_m * math.sqrt(rng.random())
+        out.append(dest_point(la, lo, brg, r))
+    return out
+
+
 # ============================================================
 # ★ 核心: 构建经过所有打卡点的基础环
 # ============================================================
@@ -225,6 +261,10 @@ def _build_base_loop(start: Tuple[float, float],
         ring.pop()
     if len(ring) < 3:
         return [start] + list(waypoints) + [start]
+
+    # ★★ 2026-09-29 打卡点顶点加「微小偏移」：不再次次精确穿过圆心。
+    #   ring[0] 是起点（落在环上，由 `swmode._pick_anchor` 决定），保持不动。
+    ring = _jitter_points(ring, rng)
 
     # 2. 闭合样条: 圆润的环, 通过全部打卡点
     dense = catmull_rom(ring, samples_per_seg=16, closed=True)

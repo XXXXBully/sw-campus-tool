@@ -410,7 +410,14 @@ def one_run(args, *, start: str = None, dist: float = None,
         cli += ["--start", start]
     if args.weight:
         cli += ["--weight", "%.1f" % args.weight]
-    if args.force_points:
+    # ★★ 计分跑默认**每条记录各自重新抽样**打卡点组合（2026-09-29）
+    #   服务端每次返回的 5 点是从校区 6 点里随机剔 1 个（离请求坐标最近的必含），
+    #   但 `swmode.load_cache` 的 TTL 是 **30 分钟** ⇒ 不加 `--force-points` 时，
+    #   短时间内连续提交的几条记录会**复用同一组 5 点**（用户要求「不用一直固定
+    #   一个打卡点组合」）。所以 score 模式下逐条强制重拉。
+    #   ★ 代价：每条都真实请求一次接口。服务端限流是「5 分钟最多 3 次」——
+    #     默认 `--days 3 --per-day 1` 正好 3 条，卡在上限内；更多条请用 --reuse-points。
+    if args.force_points or (args.mode == "score" and args.fresh_points):
         cli += ["--force-points"]
     if args.force:
         cli += ["--force"]
@@ -458,7 +465,12 @@ def main():
                     help="设备别名（见 python swcli.py devices list）。默认沿用当前")
 
     ap.add_argument("--dry-run", action="store_true", help="只预览不提交")
-    ap.add_argument("--force-points", action="store_true", help="强制重拉打卡点")
+    ap.add_argument("--force-points", action="store_true",
+                    help="强制重拉打卡点（**所有**记录都重拉）")
+    ap.add_argument("--fresh-points", dest="fresh_points", action="store_true", default=True,
+                    help="计分跑时**每条记录**各自重新抽样打卡点组合（默认开）")
+    ap.add_argument("--reuse-points", dest="fresh_points", action="store_false",
+                    help="所有记录复用同一组打卡点（30 分钟内走缓存，省接口调用）")
     ap.add_argument("--force", action="store_true", help="打卡点不可达仍提交")
     ap.add_argument("--no-obs", action="store_true", help="跳过轨迹上传")
     ap.add_argument("--no-verify", action="store_true", help="跳过回读校验")

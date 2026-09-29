@@ -672,7 +672,14 @@ def verify_track(path: str, points: list = None, verbose: bool = True) -> dict:
         #   闭合只跟轨迹形状有关，用 WGS 空间量即可（同空间，无坐标系问题）。
         rep["closed"] = rep["closed_gap_m"] < 20.0
     if points:
-        need = to_wgs_points(fixed_points(points))   # 只强制校验必经点
+        # ★★ 2026-09-29：断言范围从「只校验必经点」扩到「校验**全部下发点**」。
+        #   旧行为 `need = to_wgs_points(fixed_points(points))` 只强制 `isFixed=1`
+        #   的那一个橙点（实测在线恰好 1 个），其余 4 个普通点靠生成器把它们
+        #   串进环顶点来保证经过 —— **没有断言兜底**：生成器哪天漏掉某个非必经点，
+        #   本地 `verify_track` 照样报 OK，提交后才发现那个点没打上卡。
+        #   实测（6 种「6 选 5」组合、揭阳校区）：下发点最大偏差 4.9m，
+        #   远小于阈值 max(radius, 20)=20m，所以扩范围不会误触发。
+        need = to_wgs_points(list(points))           # 全部下发点都要命中
         gcj_pts = _track_gcj(pts) if pts else []
         allok = True
         for p in need:
