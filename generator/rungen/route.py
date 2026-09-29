@@ -386,7 +386,7 @@ def _build_base_loop(start: Tuple[float, float],
                      waypoints: Sequence[Tuple[float, float]],
                      rng: random.Random,
                      bulge: float = 1.35,
-                     shape: str = SHAPE_ELLIPSE,
+                     shape: str = SHAPE_TRACK,
                      straight_m: float = None) -> List[Tuple[float, float]]:
     """
     构建一条"经过起点和所有打卡点"的基础闭合环。
@@ -993,7 +993,7 @@ def plan_route(start: Tuple[float, float],
                rng: Optional[random.Random] = None,
                noise_sigma_m: float = 1.6,
                bulge: float = 1.35,
-               shape: str = SHAPE_ELLIPSE,
+               shape: str = SHAPE_TRACK,
                straight_m: float = None,
                ) -> Tuple[List[Tuple[float, float]], int]:
     """

@@ -27,7 +27,7 @@ from .core import (
     DEFAULT_SAMPLE_INTERVAL, IVP_W2, IVP_W3, IVP_W4, IVP_W5,
 )
 from .route import (RouteMode, plan_route, nearest_index, min_tour_length,
-                    add_sample_noise, SHAPE_ELLIPSE, SHAPES)
+                    add_sample_noise, SHAPE_ELLIPSE, SHAPE_TRACK, SHAPES)
 
 
 class RunningGenerator:
@@ -59,7 +59,7 @@ class RunningGenerator:
                  seed: Optional[int] = None,
                  target_duration_s: Optional[float] = None,
                  noise_sigma_m: float = 1.6,
-                 shape: str = SHAPE_ELLIPSE,
+                 shape: str = SHAPE_TRACK,
                  ):
 
         self.start = (float(start[0]), float(start[1]))
@@ -1188,7 +1188,7 @@ def generate_record(start_lat: float, start_lon: float, distance_km: float,
                     height_cm: float = 172.0, weight_kg: float = 65.0,
                     age: int = 22, fitness: float = 0.5,
                     sample_interval_s: float = DEFAULT_SAMPLE_INTERVAL,
-                    shape: str = SHAPE_ELLIPSE,
+                    shape: str = SHAPE_TRACK,
                     ) -> TrackRecord:
     """一行生成完整跑步记录
 

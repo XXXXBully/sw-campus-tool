@@ -490,7 +490,7 @@ def get_snapshot() -> dict:
 def do_run(mode: str, dist: float, start: str, device: str,
            pace: str, weight: float, force: bool, platform: str,
            q_lat: float = None, q_lon: float = None,
-           shape: str = "ellipse") -> dict:
+           shape: str = "track") -> dict:
     """一键跑步：确认设备(复用稳定device_id) → 排期 → 对账 → 提交。"""
     out = []
     def log(s, lv="info"):
@@ -514,7 +514,7 @@ def do_run(mode: str, dist: float, start: str, device: str,
 
 
 def _do_run_locked(mode, dist, start, device, pace, weight, force, platform,
-                   q_lat, q_lon, out, shape="ellipse"):
+                   q_lat, q_lon, out, shape="track"):
     """已持有 _RUN_LOCK 的提交体。"""
     c0 = swcli.Client()
     def log(s, lv="info"):
@@ -547,10 +547,10 @@ def _do_run_locked(mode, dist, start, device, pace, weight, force, platform,
            "--campus-lat", "%.6f" % clat,
            "--campus-lon", "%.6f" % clon,
            "--pace", pace, "--weight", "%.1f" % weight]
-    # ★ 轨迹形状（2026-09-29）：ellipse = 椭圆（最稳）；track = 标准跑道
-    if shape and shape != "ellipse":
-        cli += ["--shape", shape]
-        log("轨迹形状：标准跑道（两个半圆 + 两条直道，按校区完整点池拟合）")
+    # ★ 轨迹形状（2026-09-29）：默认 track（标准跑道）；显式传参，避免默认值散落多处
+    cli += ["--shape", shape or "track"]
+    log("轨迹形状：%s" % ("标准跑道（两个半圆 + 两条直道，按校区完整点池拟合）"
+                      if (shape or "track") == "track" else "椭圆（圆润闭合环）"))
     if start:
         cli += ["--start", start]
     if force:
@@ -688,7 +688,7 @@ class Handler(BaseHTTPRequestHandler):
                               q.get("pace", "5:40"), float(q.get("weight", 65.0)),
                               bool(q.get("force")), q.get("platform", "android"),
                               _f(q.get("lat"), None), _f(q.get("lon"), None),
-                              q.get("shape", "ellipse")))
+                              q.get("shape", "track")))
         else:
             self._json({"ok": False, "msg": "not found"}, 404)
 
@@ -980,9 +980,9 @@ PAGE = r"""<!DOCTYPE html>
         </div></div>
       <div><label>距离 (km)</label><input id="rDist" type="number" value="2.15" step="0.05" min="0.5"></div>
       <div><label>轨迹形状</label>
-        <select id="rShape" title="椭圆 = 最稳（默认）；标准跑道 = 两个半圆 + 两条直道，按校区完整点池拟合">
-          <option value="ellipse">椭圆（最稳）</option>
-          <option value="track">标准跑道</option>
+        <select id="rShape" title="标准跑道 = 两个半圆 + 两条直道（默认，按校区完整点池拟合）；椭圆 = 更圆润的闭合环">
+          <option value="track">标准跑道（默认）</option>
+          <option value="ellipse">椭圆</option>
         </select></div>
       <div><label>配速</label>
         <div class="devdd pacedd" id="paceDDBox" style="position:relative">
@@ -1762,7 +1762,7 @@ async function doRun(){
         device=$("rDevice").value,weight=parseFloat($("rWeight").value)||65,
         platform=$("rPlatform").value;
   // ★ 轨迹形状（2026-09-29）：椭圆 = 最稳（默认）；标准跑道 = 两个半圆 + 两条直道
-  const shape=($("rShape")&&$("rShape").value)||"ellipse";
+  const shape=($("rShape")&&$("rShape").value)||"track";
   if(!device||device==="__none__"){toast("请先选择/新建设备");return;}
   if(!start){toast("请选择开始时间（可点「随机」）；留空则用当前时间");start=null;}
   btn.dataset.busy="1";btn.disabled=true;btn.classList.add("running");

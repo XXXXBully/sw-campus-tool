@@ -532,7 +532,7 @@ def _pick_anchor(use: list, verbose: bool = True) -> dict:
 def gen_score_track(points: list, dist_km: float, *,
                     start: str = None, pace: str = "5:40",
                     cadence: int = 0, seed: int = 0, outdir: str = None,
-                    shape: str = "ellipse", unid: int = 0,
+                    shape: str = "track", unid: int = 0,
                     straight_m: float = 0.0,
                     verbose: bool = True) -> str:
     """计分跑：把打卡点串成闭环，多圈重复至目标距离
@@ -831,7 +831,7 @@ def prepare(c, mode: str, dist_km: float, *, campus_lat: float = None,
             campus_lon: float = None, unid: int = 0, start: str = None,
             pace: str = "5:40", cadence: int = 0, seed: int = 0,
             outdir: str = None, force_points: bool = False,
-            shape: str = "ellipse", straight_m: float = 0.0,
+            shape: str = "track", straight_m: float = 0.0,
             verbose: bool = True) -> dict:
     """按模式准备轨迹。
 

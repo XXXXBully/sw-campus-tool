@@ -296,7 +296,7 @@ def main():
     # ★★ 轨迹形状（2026-09-29）：ellipse = 圆润闭合环（默认、最稳）；
     #   track = 标准田径场（两个半圆 + 两条直道），按打卡点外接矩形自适应直道长度。
     ap.add_argument("--shape", choices=[SHAPE_ELLIPSE, SHAPE_TRACK],
-                    default=SHAPE_ELLIPSE, help="轨迹形状")
+                    default=SHAPE_TRACK, help="轨迹形状")
     ap.add_argument("--track-straight", type=float, default=0.0,
                     help="跑道形状的直道长度（米）；0 = 按打卡点自适应")
     ap.add_argument("--outdir", type=str, default="output")
