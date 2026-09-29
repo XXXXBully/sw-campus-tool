@@ -1251,9 +1251,9 @@ def build_parser():
     sp.add_argument("--mode", choices=["free", "score"], default=None,
                     help="free=自由跑(校园范围内,无需打卡点) / score=计分跑(必须过打卡点)")
     sp.add_argument("--dist", type=float, default=2.2, help="目标距离 km（--mode 时用）")
-    sp.add_argument("--shape", choices=["ellipse", "track"], default="ellipse",
-                    help="轨迹形状：ellipse=椭圆（默认，最稳）；"
-                         "track=标准跑道（两个半圆 + 两条直道）")
+    sp.add_argument("--shape", choices=["ellipse", "track"], default="track",
+                    help="轨迹形状：track=标准跑道（默认，两个半圆 + 两条直道）；"
+                         "ellipse=椭圆")
     sp.add_argument("--track-straight", type=float, default=0.0,
                     help="跑道形状的直道长度（米）；0=按打卡点自适应")
     sp.add_argument("--campus-lat", type=float, default=None, help="校区中心纬度")
