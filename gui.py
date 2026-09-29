@@ -957,6 +957,9 @@ PAGE = r"""<!DOCTYPE html>
        color:var(--txt);white-space:nowrap;cursor:pointer;min-width:0}
   .lb-remember input{flex:none!important;width:14px;height:14px;margin:0!important;
        accent-color:var(--ac);cursor:pointer}
+  /* 历史账号下拉：只占内容宽度，不抢手机号输入框的空间 */
+  .lb-acct{flex:0 0 auto!important;width:auto!important;min-width:132px;max-width:200px;
+       margin:0;font-size:13px;cursor:pointer}
   @media(max-width:720px){.row{flex-wrap:wrap}.lb-row{flex-wrap:wrap}.lb-state{flex:100%;text-align:left}}
   /* ── 手机窄屏适配（Termux 手机浏览器访问 127.0.0.1:8765）──────────────── */
   @media(max-width:560px){
@@ -974,6 +977,7 @@ PAGE = r"""<!DOCTYPE html>
     /* 登录区在手机端改为纵向堆叠：手机号一行、密码一行、登录按钮一行 */
     .lb-row{flex-direction:column;align-items:stretch;gap:8px}
     .lb-row>input{flex:none;width:100%;margin:0!important}   /* 只作用于账号/密码，避免误伤 checkbox */
+    .lb-acct{width:100%!important;max-width:none}
     .lb-row>button{flex:none;width:100%;margin:0}
     .lb-remember{flex:none;width:100%;justify-content:flex-start}
     .lb-remember input{flex:none!important;width:14px!important;height:14px!important;margin:0!important}
@@ -1010,6 +1014,8 @@ PAGE = r"""<!DOCTYPE html>
   <!-- ① 登录条 -->
   <div class="card loginbar">
     <div class="lb-row">
+      <select id="acctSel" class="lb-acct" onchange="pickAccount(this.value)"
+              style="display:none" title="选择之前登录过的账号（姓名 · 手机号）"></select>
       <input id="username" placeholder="手机号">
       <input id="password" type="password" placeholder="密码">
       <label class="lb-remember" for="remember"><input type="checkbox" id="remember" checked> 记住密码</label>
@@ -1211,6 +1217,7 @@ function render(){
     ? ('<b class="ok">已登录：'+(state.name||state.uid||"")+'</b>')
     : '<b class="no">未登录</b>';
   $("userCard").style.display=logged?"block":"none";
+  renderAccounts();   // 历史账号下拉：未登录时显示，已登录时隐藏
   if(state){
     // 设备/平台只读展示：由 fillDevices() 按 state.devices 渲染（= 账号绑定设备）
     fillDevices();
@@ -1471,6 +1478,73 @@ function setPlatFromDevice(plat){
   if(sel&&plat){sel.value=plat;}
 }
 
+/* ── 历史账号：选择之前登录过的账号（只存本机浏览器）──────────────────────
+   ★ 为什么放 localStorage 而不是后端文件：账号 + 姓名属于个人凭据，
+     写进工程根会被 `pack_all.py` 的安全检查当成「账号痕迹」拦下，
+     而且发布包**绝不能含账号数据**。放浏览器里天然与发布物隔离。
+   ★ 姓名从哪来：登录成功后服务端返回的 `data.name`（与 `session.json` 同源）。 */
+const ACCT_KEY="sw_accounts";
+const ACCT_MAX=8;
+
+function acctLabel(x){return (x.name?x.name+" · ":"")+(x.u||"");}
+
+function loadAccounts(){
+  try{
+    const raw=localStorage.getItem(ACCT_KEY);
+    if(raw){const a=JSON.parse(raw);if(Array.isArray(a))return a;}
+    // 迁移旧版单条 sw_cred —— 老用户升级后仍能看到上次的账号
+    const old=localStorage.getItem("sw_cred");
+    if(old){
+      const c=JSON.parse(decodeURIComponent(atob(old)));
+      if(c&&c.u)return [{u:c.u,p:c.p||"",name:"",last:Date.now()}];
+    }
+  }catch(e){}
+  return [];
+}
+
+function saveAccounts(list){
+  try{localStorage.setItem(ACCT_KEY,JSON.stringify(list.slice(0,ACCT_MAX)));}catch(e){}
+}
+
+/* 登录成功后 upsert：姓名取服务端返回；密码只在勾选「记住密码」时保存 */
+function rememberAccount(u,p,name){
+  const list=loadAccounts().filter(x=>x&&x.u!==u);
+  list.unshift({u:u,p:($("remember").checked?(p||""):""),name:name||"",last:Date.now()});
+  saveAccounts(list);
+  renderAccounts();
+}
+
+/* 渲染历史账号下拉：选项文字 =「姓名 · 手机号」（姓名在前） */
+function renderAccounts(){
+  const sel=$("acctSel");
+  if(!sel)return;
+  const list=loadAccounts().filter(x=>x&&x.u);
+  if(!list.length||(state&&state.logged)){sel.style.display="none";return;}
+  sel.innerHTML="";
+  const ph=document.createElement("option");
+  ph.value="";ph.textContent="选择历史账号…";
+  sel.appendChild(ph);
+  list.forEach(x=>{
+    const o=document.createElement("option");
+    o.value=x.u;o.textContent=acctLabel(x);
+    sel.appendChild(o);
+  });
+  sel.value="";
+  sel.style.display="";
+}
+
+/* 选中历史账号：填入手机号 +（若存过）密码 */
+function pickAccount(u){
+  if(!u)return;
+  const x=loadAccounts().find(y=>y&&y.u===u);
+  if(!x)return;
+  $("username").value=x.u;
+  $("password").value=x.p||"";
+  $("remember").checked=!!x.p;
+  $("password").focus();
+  toast(x.p?("已填入 "+acctLabel(x)+" 的账号密码"):("已填入 "+acctLabel(x)+"，请补密码"));
+}
+
 async function doLogin(){
   const u=$("username").value,p=$("password").value;
   if(!u||!p){toast("请输入账号密码");return;}
@@ -1478,15 +1552,10 @@ async function doLogin(){
   try{
     const res=await api("/api/login",{username:u,password:p});
     if(res.ok){
-      // 记住密码：勾选存 手机号+密码；不勾只存账号，密码清除
+      // 历史账号：姓名取服务端返回；密码只在勾选「记住密码」时保存
       try{
-        if($("remember").checked){
-          localStorage.setItem("sw_cred",btoa(encodeURIComponent(JSON.stringify({u,p}))));
-          toast("登录成功，已记住账号密码");
-        }else{
-          localStorage.setItem("sw_cred",btoa(encodeURIComponent(JSON.stringify({u}))));
-          toast("登录成功");
-        }
+        rememberAccount(u,p,(res.data&&res.data.name)||"");
+        toast($("remember").checked?"登录成功，已记住账号密码":"登录成功");
       }catch(e){toast("登录成功（但保存凭据失败）");}
       await getState();
     }
@@ -1800,14 +1869,14 @@ document.addEventListener("input",e=>{
 });
 
 (async function init(){
-  // 记住密码回填：有保存的账号密码则自动填入并勾选
+  // 回填最近一次登录过的账号（有存密码就一起填）
   let restoredPwd=false;
   try{
-    const raw=localStorage.getItem("sw_cred");
-    if(raw){
-      const cred=JSON.parse(decodeURIComponent(atob(raw)));
-      if(cred.u)$("username").value=cred.u;
-      if(cred.p){$("password").value=cred.p;$("remember").checked=true;restoredPwd=true;}
+    const list=loadAccounts();
+    if(list.length){
+      const x=list[0];
+      if(x.u)$("username").value=x.u;
+      if(x.p){$("password").value=x.p;$("remember").checked=true;restoredPwd=true;}
     }
   }catch(e){}
   await getState();
