@@ -1051,10 +1051,16 @@ PAGE = r"""<!DOCTYPE html>
         </div></div>
       <div><label>距离 (km)</label><input id="rDist" type="number" value="2.15" step="0.05" min="0.5"></div>
       <div><label>轨迹形状</label>
-        <select id="rShape" title="标准跑道 = 两个半圆 + 两条直道（默认，按校区完整点池拟合）；椭圆 = 更圆润的闭合环">
-          <option value="track">标准跑道（默认）</option>
-          <option value="ellipse">椭圆</option>
-        </select></div>
+        <div class="devdd shapedd" id="shapeDDBox" style="position:relative">
+          <div class="devdd-head" id="shapeDDHead" role="button" tabindex="0" onclick="toggleShapeDD(event)"
+               title="标准跑道 = 两个半圆 + 两条直道（默认，按校区完整点池拟合）；椭圆 = 更圆润的闭合环">
+            <span id="shapeDDTxt">标准跑道（默认）</span><span class="caret" aria-hidden="true">▾</span>
+          </div>
+          <div class="devdd-list" id="shapeDDList">
+            <div class="devdd-opts" id="shapeOpts"></div>
+          </div>
+          <input type="hidden" id="rShape" value="track">
+        </div></div>
       <div><label>配速</label>
         <div class="devdd pacedd" id="paceDDBox" style="position:relative">
           <div class="devdd-head" id="paceDDHead" role="button" tabindex="0" onclick="togglePaceDD(event)">
@@ -1771,6 +1777,48 @@ function syncModeDD(){
   if(m)$("modeDDTxt").textContent=m.t;
 }
 
+/* 轨迹形状自定义下拉：标准跑道/椭圆，与模式/配速同风格
+   ★ 2026-10-01 修：原先这里是**原生 `<select>`** —— 外观（箭头/边框/行高/下拉列表）
+     全由浏览器决定，跟页面里其它下拉框对不上。改成 .devdd 组件后完全一致。 */
+const SHAPES=[{v:"track",t:"标准跑道（默认）"},{v:"ellipse",t:"椭圆"}];
+function toggleShapeDD(e){
+  e=e||window.event;
+  if(e&&e.stopPropagation)e.stopPropagation();
+  const box=$("shapeDDBox");
+  const willOpen=!box.classList.contains("open");
+  box.classList.toggle("open",willOpen);
+  if(willOpen)renderShapeList();
+}
+function closeShapeDD(){const b=$("shapeDDBox");if(b)b.classList.remove("open");}
+function renderShapeList(){
+  const cur=$("rShape").value;
+  const box=$("shapeOpts");box.innerHTML="";
+  SHAPES.forEach(s=>{
+    const o=document.createElement("div");
+    o.className="dd-opt"+(s.v===cur?" sel":"");
+    o.textContent=s.t;
+    o.onclick=()=>setShapeValue(s.v);
+    box.appendChild(o);
+  });
+}
+function setShapeValue(v){
+  const s=SHAPES.find(x=>x.v===v)||SHAPES[0];
+  $("rShape").value=s.v;
+  $("shapeDDTxt").textContent=s.t;
+  closeShapeDD();
+  renderShapeList();
+}
+/* 点击页面其他区域收起轨迹形状下拉 */
+document.addEventListener("click",e=>{
+  const box=$("shapeDDBox");
+  if(box&&!box.contains(e.target))closeShapeDD();
+});
+function syncShapeDD(){
+  const cur=$("rShape").value;
+  const s=SHAPES.find(x=>x.v===cur);
+  if(s)$("shapeDDTxt").textContent=s.t;
+}
+
 /* 总用时 ≈ 距离 × 配速，随距离/配速变化实时刷新 */
 function updatePaceTotal(){
   const el=$("paceTotal");
@@ -1915,6 +1963,7 @@ document.addEventListener("input",e=>{
   await getState();
   updatePaceTotal();
   syncModeDD();   // 模式下拉显示与默认值同步
+  syncShapeDD();  // 轨迹形状下拉显示与默认值同步
   const d=new Date();
   const p2=n=>String(n).padStart(2,"0");
   // ★ 开始时间默认=当前时间（不要写死 18:30 —— 那在早上会是未来时间）

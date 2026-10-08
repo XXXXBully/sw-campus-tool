@@ -156,13 +156,28 @@ class RunningGenerator:
         """
         生成 n 个采样点的瞬时速度 (m/s)。
 
-        构成:
-          · 起步加速 (前 4%)
-          · 疲劳衰减 (后 40%, 幅度随 fitness 减小)
-          · 多周期叠加波动 (步态 / 呼吸 / 地形)
-          · 随机微扰
-          · 偶发减速 (路口 / 人群 / 上下坡)
-          · 移动平均平滑 (防止突变被判定异常)
+        ★★ 2026-10-08 重做：**曲线必须"平"**（用户真机反馈「配速图波动很大」）
+          旧参数下实测（2.0km / 5:40 配速 / 137 点）：
+            · 逐点瞬时配速 **51%** 的点偏离平均配速超过 35s
+              （min 235 / max 543 s/km，均值 339）；
+            · 而速度曲线本身只有 3%（全是起步那 4 个点）。
+          真机参考记录（同距离）的配速图基本是**一条平线** ——
+          用户要求「所有速度都在平均配速 ±35s 内」。
+
+          构成（幅度按"±35s 容差"反推；340 s/km 基线下 35s ≈ −9.3% / +11.5%）：
+            · 起步加速 (前 3%，最慢 0.92× ⇒ +30s，正好落在容差内)
+            · 疲劳衰减 (后 40%，幅度随 fitness 减小，最多 −2.5%)
+            · 多周期波动 (步态 / 呼吸，合计 ≤ 3.9%)
+            · 地形起伏 (长周期，≤ 1.4%)
+            · 随机微扰 (σ=1.6%，再经移动平均压到 ~0.7%)
+            · 偶发减速 (约每 130 点一次，只降 4~7% ⇒ ≤ +26s)
+          实测 6 个种子（2.0km / 5:40）：逐点配速落在 **324~359 s/km**
+          （相对平均 340 的偏差 −16 ~ +19s），**0% 的点**超出 ±35s。
+
+        ★★ 末了必须**归一化到基线速度**（`mean(profile) == base_speed`）。
+          不能省：`_walk` 的时间步长总和 = 距离 / 基线速度，
+          逐点速度若整体偏低，详情页「平均配速」就会与逐点曲线对不上
+          （旧版实测 profile 均值只有基线的 **0.9776**，即偏慢 2.2%）。
         """
         base = self.profile.base_speed
         fit = self.profile.fitness
@@ -172,31 +187,31 @@ class RunningGenerator:
         for i in range(n):
             t = i / max(1, n - 1)
 
-            # 起步加速
-            warm = 0.55 + 0.45 * (t / 0.04) if t < 0.04 else 1.0
+            # 起步加速（幅度收到 0.92 —— 再低就会顶破 ±35s 容差）
+            warm = 0.92 + 0.08 * (t / 0.03) if t < 0.03 else 1.0
 
-            # 疲劳衰减
+            # 疲劳衰减（最多 −2.5%）
             if t > 0.6:
-                fade = 1.0 - (0.10 * (1.0 - fit)) * ((t - 0.6) / 0.4)
+                fade = 1.0 - (0.025 * (1.0 - fit)) * ((t - 0.6) / 0.4)
             else:
                 fade = 1.0
 
-            # 多周期波动
+            # 多周期波动（合计 ≤ 3.9%）
             wave = (1.0
-                    + 0.030 * math.sin(2 * math.pi * t * 7.0)
-                    + 0.018 * math.sin(2 * math.pi * t * 23.0 + 1.1)
-                    + 0.010 * math.sin(2 * math.pi * t * 61.0))
+                    + 0.020 * math.sin(2 * math.pi * t * 7.0)
+                    + 0.013 * math.sin(2 * math.pi * t * 23.0 + 1.1)
+                    + 0.006 * math.sin(2 * math.pi * t * 61.0))
 
-            # 地形起伏 (长周期)
-            terrain = 1.0 + 0.025 * math.sin(2 * math.pi * t * 1.8 + 0.4)
+            # 地形起伏 (长周期, ≤ 1.4%)
+            terrain = 1.0 + 0.014 * math.sin(2 * math.pi * t * 1.8 + 0.4)
 
-            noise = rng.gauss(0, 0.022)
+            noise = rng.gauss(0, 0.016)
 
             v = base * warm * fade * wave * terrain * (1 + noise)
 
-            # 偶发减速: 约每 90 点一次
-            if rng.random() < 1.0 / 90:
-                v *= rng.uniform(0.55, 0.80)
+            # 偶发减速: 约每 130 点一次，幅度 4~7%（≤ +26s，不破容差）
+            if rng.random() < 1.0 / 130:
+                v *= rng.uniform(0.93, 0.96)
 
             speeds.append(max(0.6, v))
 
@@ -206,6 +221,11 @@ class RunningGenerator:
         for i in range(n):
             a, b = max(0, i - w), min(n, i + w + 1)
             sm.append(sum(speeds[a:b]) / (b - a))
+
+        # ★ 归一化：均值必须等于基线速度（见 docstring）
+        m = sum(sm) / len(sm)
+        if m > 1e-9:
+            sm = [v * base / m for v in sm]
         return sm
 
     # ------------------------------------------------------------------
@@ -760,11 +780,9 @@ class RunningGenerator:
             total_s = self._target_dur()
         steps = self._get_steps(n, total_s)
 
-        prev_pushed = False     # 上一点是否被 min_gap 外推过（间距会失真）
         for i in range(n):
             la, lo = coords[i]
             low_gap = False
-            pushed = False
 
             if i == 0:
                 seg = 0.0
@@ -791,7 +809,7 @@ class RunningGenerator:
                 #   实测 5 配速 × 40 种子共 200 例中 15~17% 中招，
                 #   闭合缝 5.2~11.0m，超过 swmode.verify_track 的 5m 阈值
                 #   → warn → swcli.py return 5 阻止提交（用户线上报错即此）。
-                #   位置保持不动，速度改由曲线决定（见下方 low_gap 分支），
+                #   位置保持不动，速度直接取曲线值（见下），
                 #   因此**不会**在末尾挖出一个假低速点。
                 anchor = (i == n - 1 and self.mode == RouteMode.LOOP)
                 if low_gap and not anchor:
@@ -799,41 +817,27 @@ class RunningGenerator:
                            if seg > 1e-9 else self.rng.uniform(0, 360))
                     la, lo = dest_point(prev_la, prev_lo, brg, min_gap)
                     seg = haversine(prev_la, prev_lo, la, lo)
-                    pushed = True
 
             cum += seg
             elapsed += step
             ts = int((t0 + timedelta(seconds=elapsed)).timestamp() * 1000)
 
-            # ★ 速度口径：间距**不可靠**时不能再用 seg/step ——
-            #   ① 被 min_gap 抬升过的点：seg 恰好等于 min_gap =
-            #      speeds[i]*step*0.55，seg/step 恒为 0.55×目标速度；
-            #   ② 闭环末锚点：间距是绕过拐角的弦（可能只有 1~2m），
-            #      seg/step 会掉到 0.4 m/s 级；
-            #   ③ 上一点被抬升过：本段 seg 是拿「被挪过的 prev」量出来的，
-            #      已失真（上一点被外推 min_gap 后，本段 seg 会变成
-            #      min_gap + 几何间距，实测造出 11.3 m/s 的假瞬时速度，
-            #      而全程均速才 2.7 m/s）。
-            #   三者都会在配速曲线上挖出假峰/假谷。按上面的设计意图
-            #   （间距与速度解耦）直接取速度曲线值。
-            #   ★ 只改速度、**不动位置** —— 位置一变, 闭环标定会失稳。
-            if i == 0 or step <= 0:
-                spd = speeds[0]
-            elif low_gap or prev_pushed:
-                spd = speeds[i]
-            else:
-                spd = seg / step
-                # ★★ 间距被 GPS 抖动污染时, seg/step 同样不可信 (2026-09-25)
-                #   几何间距是**按 speeds[i-1]*step 分配**的 (见 _align_geometry),
-                #   所以 seg/step 本就该 ≈ 速度曲线值。采样点抖动 σ=1.6m
-                #   叠在 1~2 秒的小步上时 (间距只有 3~6m), seg 被放大/缩小
-                #   40% 以上 —— 实测 seg/step 炸到 **10.09 m/s** 的假瞬时
-                #   速度 (全程均速才 3.1 m/s), 步幅跟着失真。
-                #   偏离曲线太远就说明间距不可信, 直接取速度曲线值 ——
-                #   与 low_gap / prev_pushed 完全同一口径。
-                ref = speeds[i - 1]
-                if ref > 1e-9 and not (0.65 * ref <= spd <= 1.45 * ref):
-                    spd = speeds[i]
+            # ★★ 逐点速度**一律取速度曲线值**（2026-10-08 用户报「配速图波动很大」）
+            #   旧实现走 `spd = seg / step`（仅当偏离曲线 > 35%/45% 才回退）。
+            #   实测（2.0km / 5:40 / 137 点）：
+            #       seg/step 原始值  偏离平均配速 > 35s 的点占 **52%**
+            #       速度曲线本身     只有 **3%**
+            #   差距全部来自 `add_sample_noise` 的 σ=1.6m GPS 抖动 ——
+            #   它叠在 ~15m 的采样间距上，把 seg 放大/缩小 ±11%，
+            #   而 `seg/step` 又把这误差 1:1 转成瞬时速度（min 210 / max 630 s/km）。
+            #   几何本来就是**按 `speeds[i] * step` 分配弧长**的（见
+            #   `_align_geometry`），所以 `seg/step` 的正确值就是曲线值本身；
+            #   抖动纯属噪声，不该进配速曲线。
+            #   ★ 只改速度、**不动位置** —— 位置一变，闭环标定会失稳。
+            #   ★ `speed` 仍恒 > 0（isValidPoint 的 s0 分项要求 > 0）。
+            spd = speeds[i] if (i > 0 and step > 0) else speeds[0]
+            if spd <= 0:
+                spd = 0.6
 
             points.append(GeoPoint(
                 lat=la, lon=lo, ts_ms=ts, ele=0.0,
@@ -841,7 +845,6 @@ class RunningGenerator:
                 dist_from_start=cum, seg_m=seg,
             ))
             prev_la, prev_lo = la, lo
-            prev_pushed = pushed
 
         return points, cum
 

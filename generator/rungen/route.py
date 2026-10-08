@@ -80,6 +80,71 @@ SHAPES = (SHAPE_ELLIPSE, SHAPE_TRACK)
 #   想强行固定成某个值（例如 50 m）可用 `RGEN_TRACK_STRAIGHT_M` 覆盖。
 TRACK_STRAIGHT_M = float(os.environ.get("RGEN_TRACK_STRAIGHT_M", "0"))
 
+# ★★ 起点落在跑道的哪个位置（2026-10-08 用户要求）
+#   用户真机反馈：「标准跑道轨迹起点能不能在这个红点位置，就是比较靠左下角」，
+#   并给了参考图 —— 真机记录的「起」正好压在跑道**左下角**（直道与半圆的交点），
+#   而不是直道中点。
+#     True  = 落在**跑道左下角**（地图视角：东+北 最小的那个拐角）
+#     False = 落在"离 `start`（= `swmode._pick_anchor` 挑的避让点）最近的曲线点"
+#   可用 `RGEN_TRACK_START_CORNER=0` 退回旧行为做 A/B 对照。
+TRACK_START_AT_CORNER = os.environ.get("RGEN_TRACK_START_CORNER", "1") != "0"
+
+# ★★ 「左下角起点」距最近打卡点的最小净空（米）。
+#   与 `swmode.ANCHOR_MIN_CLEAR_M` 同义 —— 详情页「起」图钉若压在打卡点圆上，
+#   肉眼会以为「这个点没打上」（2026-09-29「终遮点」同类问题）。
+#   ★ 为什么单独需要它：`_pick_anchor` 的 25 m 避让只管**锚点**，
+#     而「左下角」是直接投到跑道拐角上的 —— **绕过了那条规则**。
+#   本校区实测：拐角距「田径场4」仅 **8.46 m**（沿弧 +4 m 处更是只有 0.99 m）
+#   ⇒ 必须沿曲线让开。设为 0 可关闭让避（`RGEN_TRACK_START_CLEAR_M=0`）。
+TRACK_START_CLEAR_M = float(os.environ.get("RGEN_TRACK_START_CLEAR_M", "25"))
+
+# ★★ 起点「接入直线」（尾巴）长度，米（2026-10-08 用户要求）。
+#   用户看完第一版渲染后反馈：「这个起点还不够下，可以再下一点，
+#   然后一段直线接入这个标准跑道」。
+#   语义：起点**不在跑道上**，而在跑道左下角**外侧** `TRACK_START_TAIL_M` 米处；
+#        从起点到跑道接入点（左下角）是**一条直线**。
+#   ★ 方向 = 接入点处直道的**切向外延**（= 把直道再延长一段）——
+#     几何上拐角处直道与半圆本来就是相切的，所以这条尾巴与直道共线，
+#     画出来就是「直道向下多延伸了一截」，不是斜插进来的引线。
+#   ★ 为什么这样反而**更真**：真机参考图（2026-10-08）里「起」图钉的锚点
+#     就落在跑道左下**外侧**，轨迹首点（红点）才在跑道拐角上。
+#   ★ 里程影响：尾巴走两趟（出+回），所以环本体只跑到
+#     `target_len - 2*TRACK_START_TAIL_M`；而 `open_loop_tail` 的回退
+#     （50~110 m）会**吃掉回程那一趟** ⇒ 最终轨迹只走一趟尾巴，
+#     「终」落在环上（与参考图一致：起≠终）。
+#   ★ 默认 **40 m**（2026-10-08 第三轮改）：接入点从「左下角拐角」挪到
+#     「半圆最底点」后，起点会**往东靠 41 m** ⇒ 逼近「田径场3」（它就贴在
+#     南侧半圆上，距弧仅 2.15 m）⇒ 尾巴 32 m 时起净空只有 **18.9 m**（< 25）。
+#     加长到 40 m ⇒ **26.9 m** ✅（48 m ⇒ 34.9 m）。
+#     ★ 拐角模式下 40 m 同样成立（起净空 40.0 m），所以两个模式共用一个默认值。
+#   ★ 最初 32 m 的依据：按真机参考图量，图钉锚点离跑道拐角约 **32 m**
+#     （参考图 880px 宽、跑道宽 ~260px ≈ 73 m ⇒ 3.56 px/m，图钉锚点偏 115px）。
+#   设为 0 可关闭（起点回到跑道曲线上，即上一版行为）。
+TRACK_START_TAIL_M = float(os.environ.get("RGEN_TRACK_START_TAIL_M", "40"))
+
+# ★★ 接入直线的**方向**（2026-10-08 用户第二版澄清：「横着接入，由西向东」）
+#     False（默认）= **正西→正东**（地图视角的**水平**线）：
+#                     起点在跑道正左方，轨迹向东进入跑道。
+#     True          = 上一版：沿直道**切向外延**（竖直，方位 186°）。
+#   可用 `RGEN_TRACK_TAIL_ALONG_LANE=1` 切回上一版做 A/B。
+TRACK_TAIL_ALONG_LANE = os.environ.get("RGEN_TRACK_TAIL_ALONG_LANE", "0") != "0"
+
+# ★★ 接入点落在跑道的**哪个位置**（2026-10-08 用户第三轮追加：
+#    「这个横向接入位置能接在标准跑道的**半圆最底点**附近吗」）
+#     "corner"        = **左下角拐角**（直道与半圆的交点）—— 上一版；
+#     "bottom"（默认）= **南侧半圆的最底点**（长轴南端顶点）。
+#   ★ 为什么接在底点反而**更平滑**：正西尾巴的方向 ≈ 短轴方向，而半圆在
+#     最底点的**切向**也 ≈ 短轴方向 ⇒ 尾巴与半圆**相切**，转角从拐角处的
+#     ~96° 降到 **~6°**（画出来是一条直线"顺"进弧线，没有折角）。
+#   ★ 代价：起点会往东挪 ⇒ 靠近「田径场3」⇒ 起净空从 32.2 m 掉到 18.9 m
+#     （低于 25 m 避让阈值）。补救 = 把尾巴加长（40 m ⇒ 26.9 m，48 m ⇒ 34.9 m）。
+#   ★ `TRACK_START_BOTTOM_DEG`：在最底点所在半圆上**再偏一点**（度）。
+#     0 = 正最底点；负值 = 往**西**偏（离「田径场3」更远、净空回升）。
+#     实测（尾巴 32 m）：-15° ⇒ 28.4 m、-30° ⇒ 30.4 m（同时保住平滑）。
+TRACK_START_AT_BOTTOM = os.environ.get("RGEN_TRACK_START_AT", "bottom").lower() \
+    in ("bottom", "1", "true", "yes")
+TRACK_START_BOTTOM_DEG = float(os.environ.get("RGEN_TRACK_BOTTOM_DEG", "0"))
+
 # 跑道曲线采样步长（米）。必须足够密，否则 Catmull-Rom 会把直道
 #   切出肉眼可见的折角（直道本来就该是直的）。
 TRACK_STEP_M = 2.0
@@ -339,10 +404,64 @@ def _stadium_ring(start: Tuple[float, float],
     return ll + [ll[0]]
 
 
+def _nudge_off_points(corner: Tuple[float, float],
+                      start: Tuple[float, float],
+                      waypoints: Sequence[Tuple[float, float]],
+                      straight_m: float = None,
+                      clear_m: float = None) -> Tuple[float, float]:
+    """把「左下角起点」沿跑道曲线让开打卡点，保证净空 ≥ `clear_m` 米。
+
+    ★★ 为什么必须做（2026-10-08 实测）：`swmode._pick_anchor` 有 25 m 避让规则，
+      但「左下角」是**直接投到跑道拐角上**的 —— 绕过了那条规则。
+      本校区实测：拐角距「田径场4」仅 **8.46 m**（沿弧 +4 m 处更是只有 0.99 m）
+      ⇒ 详情页「起」图钉会压住该打卡点，肉眼以为「这个点没打上」。
+      让避方向取「沿曲线走得更近的那一侧」，落点仍在左下角区域、仍在跑道上。
+    ★ 找不到满足净空的点就**原样返回拐角**（宁可遮点，也不要跑偏）。
+    ★ `clear_m <= 0` 时直接返回拐角（关闭让避，供 A/B）。
+    """
+    clear_m = TRACK_START_CLEAR_M if clear_m is None else clear_m
+    cps = [(float(p[0]), float(p[1])) for p in waypoints]
+    if not cps or clear_m <= 0:
+        return corner
+
+    def clr(p):
+        return min(haversine(p[0], p[1], q[0], q[1]) for q in cps)
+
+    if clr(corner) >= clear_m:
+        return corner
+
+    ring = _stadium_ring(start, waypoints, straight_m=straight_m)
+    if len(ring) < 3:
+        return corner
+    n = len(ring)
+    ci = min(range(n), key=lambda i: haversine(corner[0], corner[1],
+                                               ring[i][0], ring[i][1]))
+
+    def arc_to(k, d):
+        """从 ci 沿方向 d 走到第 k 步的累计弧长（米）。"""
+        tot = 0.0
+        for j in range(k):
+            a = ring[(ci + d * j) % n]
+            b = ring[(ci + d * (j + 1)) % n]
+            tot += haversine(a[0], a[1], b[0], b[1])
+        return tot
+
+    best = None
+    for d in (+1, -1):
+        for k in range(1, n):
+            i = (ci + d * k) % n
+            if clr(ring[i]) >= clear_m:
+                arc = arc_to(k, d)
+                if best is None or arc < best[0]:
+                    best = (arc, ring[i])
+                break
+    return best[1] if best else corner
+
+
 def _stadium_nearest(start: Tuple[float, float],
                      waypoints: Sequence[Tuple[float, float]],
                      straight_m: float = None) -> Tuple[float, float]:
-    """把 `start` 投到「由打卡点拟合出的那条跑道曲线」上，返回投影点经纬度。
+    """返回"起点应该落在跑道曲线的哪一点"（经纬度）。
 
     ★★ 为什么必须做（2026-09-29 实测）：`swmode._pick_anchor` 是按**打卡点
       构成的环**挑起点的（最大角空隙中点），它并不知道我们要画跑道；
@@ -350,6 +469,15 @@ def _stadium_nearest(start: Tuple[float, float],
       起点在环外 ⇒ 轨迹必须"出去一趟再回来" ⇒ 地图上多一根 44 m 的**引线**，
       外接矩形被撑宽（实测 163×75 的跑道变成 167×119），直道也被拉弯。
       ⇒ 跑道形状下，先把起点投到跑道曲线上，再走后面的流程。
+
+    ★★ 2026-10-08 改：投影目标从「离 `start` 最近的曲线点」改成
+      **跑道左下角**（见 `TRACK_START_AT_CORNER`）。用户真机反馈 + 参考图：
+      真机记录的「起」压在跑道左下角（直道与半圆的交点）上，而不是直道中点。
+      实测本校区：旧行为落点在**西直道中点以北**（局部坐标 a=+20.8, b=−R），
+      新行为落在**西南角**（a=+half, b=−R）—— 与参考图一致。
+      `RGEN_TRACK_START_CORNER=0` 可退回旧行为。
+      ★ 拐角落点随后还要过一遍 `_nudge_off_points`（净空让避）——
+        因为本校区「田径场4」正压在拐角上（距 8.46 m）。
     """
     la0, lo0 = start
     wxy = _to_xy(la0, lo0, list(waypoints))
@@ -360,10 +488,58 @@ def _stadium_nearest(start: Tuple[float, float],
         S = float(straight_m)
 
     vx, vy = -u[1], u[0]
+    half = S / 2.0
+
+    if TRACK_START_AT_BOTTOM:
+        # ★★ 2026-10-08 第三轮：接入点 = **南侧半圆的最底点**（长轴南端顶点）。
+        #   取两个长轴端点里**更靠南**（全局 y 更小）的那个 = 地图视角的"底"。
+        #   半圆参数 θ 从该端点起算（0 = 正底点，负 = 往西偏）。
+        ends = []
+        for sgn in (+1.0, -1.0):
+            qx, qy = cx + sgn * (half + R) * u[0], cy + sgn * (half + R) * u[1]
+            ends.append((qy, sgn))
+        ends.sort()
+        esgn = ends[0][1]
+        th = math.radians(TRACK_START_BOTTOM_DEG)
+        # ★★ 注意 θ 必须相对**朝外方向** `esgn*a` 量：
+        #   `ca = esgn*half + R*cos θ` 只有 esgn=+1 时 θ=0 才是顶点；
+        #   esgn=-1 时它会落到 OBB **内部**（实测 a=-8.9 而不是 -77.6）。
+        #   正确写法 = `esgn*(half + R*cos θ)`（与 `_stadium_ring` 的
+        #   半圆参数化一致：`P(±half + R*cos ang, R*sin ang)`，
+        #   其中 ang∈(π/2,3π/2) 那一半才是**朝外**的）。
+        ca = esgn * (half + R * math.cos(th))
+        cb = R * math.sin(th)
+        qx = cx + ca * u[0] + cb * vx
+        qy = cy + ca * u[1] + cb * vy
+        # ★ 与拐角分支同理：开了尾巴就不做「沿曲线让避」（尾巴已在环外）。
+        return _to_ll(la0, lo0, [(qx, qy)])[0]
+
+    if TRACK_START_AT_CORNER:
+        # 4 个"角" = 两条直道与两个半圆的交点，局部坐标就是 (±half, ±R)。
+        # "左下角"取地图视角：x 是东、y 是北 ⇒ 最小化 (x + y)。
+        #   （长轴朝南北时 = 西南角；长轴朝东西时 = 同样是屏幕左下那个角。）
+        best = None
+        for ca, cb in ((half, -R), (half, R), (-half, -R), (-half, R)):
+            qx = cx + ca * u[0] + cb * vx
+            qy = cy + ca * u[1] + cb * vy
+            key = qx + qy
+            if best is None or key < best[0]:
+                best = (key, qx, qy)
+        corner = _to_ll(la0, lo0, [(best[1], best[2])])[0]
+        # ★★ 2026-10-08：开了「接入直线」（尾巴）时**不做让避**。
+        #   原因：让避是为了别让「起」图钉压住打卡点 —— 而现在「起」落在
+        #   环外 `TRACK_START_TAIL_M` 米处，图钉早就不在拐角上了；
+        #   反而轨迹从**正拐角**进环时离打卡点最近（本校区距「田径场4」
+        #   8.46 m < 判定半径 15 m），更容易"打上卡"。
+        #   若此时还沿曲线让避 18 m，尾巴就会先与直道重叠 18 m 再出去 —— 画花了。
+        if TRACK_START_TAIL_M > 0:
+            return corner
+        # ★ 净空让避：拐角可能正压着打卡点（本校区实测距「田径场4」仅 8.46 m）
+        return _nudge_off_points(corner, start, waypoints, straight_m)
+
     px, py = 0.0, 0.0                      # start 在局部 XY 里就是原点
     a = (px - cx) * u[0] + (py - cy) * u[1]
     b = (px - cx) * vx + (py - cy) * vy
-    half = S / 2.0
     if abs(a) <= half:                     # 投影到直道
         qa, qb = a, (R if b >= 0 else -R)
     else:                                  # 投影到半圆
@@ -377,6 +553,63 @@ def _stadium_nearest(start: Tuple[float, float],
     qx = cx + qa * u[0] + qb * vx
     qy = cy + qa * u[1] + qb * vy
     return _to_ll(la0, lo0, [(qx, qy)])[0]
+
+
+def _tail_dir_xy(entry: Tuple[float, float],
+                 waypoints: Sequence[Tuple[float, float]],
+                 straight_m: float = None) -> Tuple[float, float]:
+    """返回接入点 → 起点 S 的单位方向（平面米坐标，x=东 y=北）。
+
+    ★★ 2026-10-08 用户澄清（第二版）：「我说的是**横着**接入，就是**由西向东**」
+      ⇒ 尾巴必须是**地图视角的水平线**：起点在跑道**正左方**，轨迹向东进入跑道。
+      上一版按「直道切向外延」做成了**竖直**的（方位 186°），方向错了。
+      ⇒ 方向恒为**正西** `(-1, 0)`。
+
+    ★ 为什么「正西」对两种跑道朝向都成立：
+      · 长轴南北（本校区）：接入点在西直道上，向西 = **垂直**于直道 = 水平线；
+      · 长轴东西：接入点是西端拐角，向西 = **沿着**直道 = 同样是水平线。
+      两种情形画出来都是"从左边横着接进来"。
+
+    ★ 接入点仍是**左下角拐角**：该拐角是整条跑道**最西**的点，
+      水平线向东第一个碰到的就是它 —— 交点唯一，不会切进跑道内部。
+    ★ `RGEN_TRACK_TAIL_ALONG_LANE=1` 可退回上一版（沿直道竖直外延）做 A/B。
+    """
+    if not TRACK_TAIL_ALONG_LANE:
+        return (-1.0, 0.0)                     # 正西（水平接入）
+    la0, lo0 = entry
+    wxy = _to_xy(la0, lo0, list(waypoints))
+    cx, cy, u, _w, _h = _min_area_obb(wxy)
+    ex, ey = _to_xy(la0, lo0, [entry])[0]
+    a = (ex - cx) * u[0] + (ey - cy) * u[1]
+    sgn = 1.0 if a >= 0 else -1.0
+    return (sgn * u[0], sgn * u[1])
+
+
+def _attach_start_tail(closed_ll: Sequence[Tuple[float, float]],
+                       entry: Tuple[float, float],
+                       tail_m: float,
+                       waypoints: Sequence[Tuple[float, float]],
+                       straight_m: float = None
+                       ) -> List[Tuple[float, float]]:
+    """在闭环的**接入点**上接一段直线尾巴，起点落到环外 `tail_m` 米处。
+
+    输入 `closed_ll` 必须是**已锚定**的闭环（首点 = 末点 = `entry`，见
+    `anchor_ring`）。输出仍是闭环：`[S, entry, p1 ... pn, S]`，
+    即「起点 S → 直线接入 entry → 绕环一圈 → 沿尾巴回 S」。
+
+    ★ 回程那一趟会被 `swmode.open_loop_tail`（回退 50~110 m）吃掉
+      ⇒ 最终交付的轨迹里尾巴**只走一趟**，「终」落在环上（起 ≠ 终，
+      与真机参考图一致）。
+    ★ `tail_m <= 0` 原样返回（关闭该特性）。
+    """
+    ring = _open_ring(closed_ll)
+    if tail_m <= 0 or len(ring) < 3:
+        return list(closed_ll)
+    dx, dy = _tail_dir_xy(entry, waypoints, straight_m)
+    la0, lo0 = entry
+    ex, ey = _to_xy(la0, lo0, [entry])[0]
+    S = _to_ll(la0, lo0, [(ex + dx * tail_m, ey + dy * tail_m)])[0]
+    return [S] + ring + [S]
 
 
 # ============================================================
@@ -957,28 +1190,38 @@ def _plan_track_loop(start: Tuple[float, float],
       真机观感验证：跑道轨迹本就沿跑道规整，无抖动不影响真实感。
     """
     sm = straight_m if straight_m is not None else TRACK_STRAIGHT_M
+
+    # ★★ 起点「接入直线」（尾巴）：环本体只跑到 `target_len - 2*tail`，
+    #   因为尾巴在闭环里走两趟（出 + 回）。见 `TRACK_START_TAIL_M`。
+    #   ★ 回程那趟随后被 `open_loop_tail` 吃掉，所以**不会**在图上重叠。
+    tail_m = max(0.0, TRACK_START_TAIL_M)
+    ring_target = max(50.0, target_len - 2.0 * tail_m)
+
     st = _stadium_nearest(start, waypoints, straight_m=sm)
     ring = _stadium_ring(st, waypoints, straight_m=sm)
-    ctrl, laps = _repeat_to_length(ring, target_len, rng, lateral_m=lateral_m,
+    ctrl, laps = _repeat_to_length(ring, ring_target, rng, lateral_m=lateral_m,
                                    waypoints=waypoints, anchor=st, rescale=False)
 
     la0, lo0 = ctrl[0]
     xy = _track_zoom(_to_xy(la0, lo0, ctrl),
-                     _to_xy(la0, lo0, list(waypoints)), target_len)
+                     _to_xy(la0, lo0, list(waypoints)), ring_target)
     ll = _to_ll(la0, lo0, xy)
 
     if noise_sigma_m > 0:
         # 仅在调用方显式要求时启用；见上文，点间距 0.17 m 下必须用极小值
-        step = target_len / max(1, len(ll))
+        step = ring_target / max(1, len(ll))
         sig = min(float(noise_sigma_m), 0.3 * step)
         ll = _add_tangential_noise(ll, sig, rng, closed=True)
         la1, lo1 = ll[0]
         ll = _to_ll(la1, lo1, _track_zoom(_to_xy(la1, lo1, ll),
                                           _to_xy(la1, lo1, list(waypoints)),
-                                          target_len))
+                                          ring_target))
 
     # 起点硬锚定（刚体平移；跑道下首点本就在曲线上，平移量 ≈ 0）
     ll = anchor_ring(ll, st)
+
+    # ★ 接尾巴：起点落到环外，再沿直线接入跑道（2026-10-08 用户要求）
+    ll = _attach_start_tail(ll, st, tail_m, waypoints, straight_m=sm)
     return ll, laps
 
 

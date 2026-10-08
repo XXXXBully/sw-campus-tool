@@ -158,8 +158,20 @@ def _pool_load() -> dict:
     return {}
 
 
-def merge_points_pool(points: list, unid: int = 0) -> list:
-    """把本次下发的打卡点并进「校区池」，返回该池的全部点。"""
+def merge_points_pool(points: list, unid: int = 0, max_km: float = 5.0) -> list:
+    """把本次下发的打卡点并进「校区池」，返回该池的全部点。
+
+    ★★ 2026-10-08 加「同校区」护栏（踩坑：`points_pool.json` 被写脏）
+      本函数是**唯一**会写 `points_pool.json` 的地方，而该文件是**随包发布**的。
+      踩到的坑：`_gh_tools/test_points_cache.py` / `test_points_field.py` 直接调
+      `get_points()` 喂假点位（`一号点` 23.0/116.0、`二号点` 23.001/116.001），
+      两个假点被**真的写进了** `points_pool.json` 的 `3305` 池 ——
+      之后所有计分跑都会把这两个 **33 km 外**的点当成"必经点"去绕：
+      实测轨迹被撑成 **93.42 km**、起点跑到 (23.0005, 115.9965)、
+      离真实打卡点 82~163 m（= 提交上去必然"没经过打卡点"）。
+      ⇒ 新点集的质心若离已有池质心 > `max_km`，**判为不同校区：不并入、不写盘**。
+      池为空（该校区首次运行）时照旧写入。
+    """
     if not points:
         return []
     d = _pool_load()
@@ -168,9 +180,19 @@ def merge_points_pool(points: list, unid: int = 0) -> list:
     for p in d.get(key) or []:
         if isinstance(p, dict) and p.get("pointName"):
             cur[p["pointName"]] = p
-    for p in points:
-        if isinstance(p, dict) and p.get("pointName"):
-            cur[p["pointName"]] = p
+
+    new_pts = [p for p in points
+               if isinstance(p, dict) and p.get("pointName")]
+    if cur and new_pts:
+        c_old = _centroid(list(cur.values()))
+        c_new = _centroid(new_pts)
+        if c_old is not None and c_new is not None:
+            dd = haversine(c_old[0], c_old[1], c_new[0], c_new[1]) / 1000.0
+            if dd > max_km:
+                return list(cur.values())
+
+    for p in new_pts:
+        cur[p["pointName"]] = p
     d[key] = list(cur.values())
     try:
         json.dump(d, open(POOL_FILE, "w", encoding="utf-8"),
@@ -412,6 +434,27 @@ def to_wgs_points(points: list) -> list:
 # ══════════════════════════════════════════════════════════════════
 def _gen_cmd():
     return [sys.executable, os.path.join(HERE, "generator", "run_gen.py")]
+
+
+def _track_tail_m() -> float:
+    """跑道形状下「起点接入直线」（尾巴）的长度，米。
+
+    ★ 唯一实现在 `generator/rungen/route.TRACK_START_TAIL_M` —— 这里只读值，
+      用来给 `open_loop_tail` 定**回退下限**。
+    ★ 为什么需要（2026-10-08 实测）：尾巴在闭环里走**两趟**（出 + 回），
+      留口只按 `LOOP_TAIL_GAP_M`(50m) 回退时只吃掉尾巴 30m 里的一部分，
+      剩下的回程与去程**重叠画花**；而且回退量从 50 起算 ⇒ 交付里程
+      实测 **2060m**（请求 2000m，偏 +3%）。
+      把下限抬到 `50 + 尾巴` ⇒ 交付落在 **[2000, 2030]**。
+    """
+    try:
+        gp = os.path.join(HERE, "generator")
+        if gp not in sys.path:
+            sys.path.insert(0, gp)
+        from rungen import route as _rt
+        return max(0.0, float(_rt.TRACK_START_TAIL_M))
+    except Exception:
+        return 0.0
 
 
 def _fmt_start(dt=None) -> str:
@@ -754,17 +797,33 @@ def open_loop_tail(path: str, gap_m: float = LOOP_TAIL_GAP_M,
 
             cur_d = _clear(_point_at_dist(pts, seg, seg[-1] - gap_m))
             best_g, best_d = gap_m, cur_d
+            # ★★ 候选必须**显式包含上限**（2026-10-08 修）
+            #   旧写法从 `gap_m+5` 起步、每 5 m 一档 —— 下限不是 5 的倍数时
+            #   （例：跑道尾巴把下限抬到 82）永远扫不到 110，最后一个候选停在
+            #   107 ⇒ 差 1 m 就够不着 `ANCHOR_MIN_CLEAR_M`，「终」被静默留在
+            #   离打卡点 **2.14 m** 的位置（实测 tail=32m 时）。
+            gs = []
             g = gap_m + 5.0
-            while g <= LOOP_TAIL_GAP_MAX_M + 1e-9:
+            while g <= LOOP_TAIL_GAP_MAX_M - 1e-9:
+                gs.append(g)
+                g += 5.0
+            gs.append(LOOP_TAIL_GAP_MAX_M)
+            for g in gs:
                 d = _clear(_point_at_dist(pts, seg, seg[-1] - g))
                 if d > best_d + 1e-6:
                     best_d, best_g = d, g
-                g += 5.0
-            if best_g > gap_m and best_d >= ANCHOR_MIN_CLEAR_M:
+            # ★★ 只要比「下限处」更好就采纳（2026-10-08 修）
+            #   旧逻辑是 `best_d >= ANCHOR_MIN_CLEAR_M` 才采纳 —— 扫遍区间
+            #   都够不着 25 m 时就**原地不动**，把「终」留在下限那个更差的
+            #   位置上（实测 tail=34m：最优候选 23.9 m 被丢弃，实际留 2.15 m）。
+            #   正确语义：区间内取**净空最大**的那个，够不着阈值只是「尽力而为」
+            #   + 告警，绝不该比最优候选更差。
+            if best_g > gap_m and best_d > cur_d + 1e-6:
                 if verbose:
+                    tag = "" if best_d >= ANCHOR_MIN_CLEAR_M else "  ⚠ 仍 <%.0fm" % ANCHOR_MIN_CLEAR_M
                     print("  [留口] 终距最近打卡点 %.1fm(<%.0fm) ⇒ 回退 %.0fm→%.0fm"
-                          "（终距最近打卡点 %.1fm）"
-                          % (cur_d, ANCHOR_MIN_CLEAR_M, gap_m, best_g, best_d))
+                          "（终距最近打卡点 %.1fm）%s"
+                          % (cur_d, ANCHOR_MIN_CLEAR_M, gap_m, best_g, best_d, tag))
                 gap_m = best_g
             elif verbose and cur_d < ANCHOR_MIN_CLEAR_M:
                 print("  [留口] ⚠ 扫遍 %.0f~%.0fm 仍找不到让「终」离打卡点"
@@ -980,8 +1039,15 @@ def prepare(c, mode: str, dist_km: float, *, campus_lat: float = None,
         print("  [校验] 必经点命中 & 闭合性")
     # ★ 顺序：先校验**完整闭环**（20m 严阈值），再留口（展示层修饰）
     rep = verify_track(res["track"], pts, verbose=verbose)
+    # ★ 回退下限：跑道形状要把「尾巴的回程那一趟」算进去（见 `_track_tail_m`），
+    #   否则尾巴在图上重叠、且交付里程会偏长 3%。
+    gap_floor = LOOP_TAIL_GAP_M
+    if shape == "track":
+        gap_floor = min(LOOP_TAIL_GAP_MAX_M,
+                        LOOP_TAIL_GAP_M + _track_tail_m())
     # ★ 传 WGS-84 打卡点（与轨迹同坐标系），让「终」也躲开打卡点
-    open_loop_tail(res["track"], clear_points=to_wgs_points(pts),
+    open_loop_tail(res["track"], gap_m=gap_floor,
+                   clear_points=to_wgs_points(pts),
                    verbose=verbose)
     if not rep["ok"]:
         res["warn"] = (res["warn"] or "") + " [轨迹未完全通过必经点/未闭合]"
